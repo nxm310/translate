@@ -12,6 +12,8 @@ const model = 'gemini-3.1-flash-live-preview';
 const config = {
   responseModalities: [Modality.AUDIO],
   systemInstruction: "You are a helpful and friendly AI assistant.",
+  outputAudioTranscription: {},
+  inputAudioTranscription: {},
 };
 
 async function live() {
@@ -40,21 +42,37 @@ async function live() {
     process.stdin.pipe(speaker);
   }
 
+  let lastWasInput = false;
+
   async function messageLoop() {
     // Puts incoming messages in the audio queue.
     while (true) {
       const message = await waitMessage();
-      if (message.serverContent && message.serverContent.interrupted) {
+      const sc = message.serverContent;
+      if (!sc) continue;
+      if (sc.interrupted) {
         // Empty the queue on interruption to stop playback
         audioQueue.length = 0;
         continue;
       }
-      if (message.serverContent && message.serverContent.modelTurn && message.serverContent.modelTurn.parts) {
-        for (const part of message.serverContent.modelTurn.parts) {
-          if (part.inlineData && part.inlineData.data) {
+      if (sc.modelTurn?.parts) {
+        for (const part of sc.modelTurn.parts) {
+          if (part.inlineData?.data) {
             audioQueue.push(Buffer.from(part.inlineData.data, 'base64'));
           }
         }
+      }
+      if (sc.outputTranscription?.text) {
+        if (lastWasInput) { process.stdout.write('\n'); lastWasInput = false; }
+        const t = sc.outputTranscription.text;
+        process.stdout.write(t);
+        if (/[.!?]\s*$/.test(t)) process.stdout.write('\n');
+      }
+      if (sc.inputTranscription?.text) {
+        if (!lastWasInput) { process.stdout.write('\n'); lastWasInput = true; }
+        const t = sc.inputTranscription.text;
+        process.stdout.write(`\x1b[3m${t}\x1b[0m`);
+        if (/[.!?]\s*$/.test(t)) process.stdout.write('\n');
       }
     }
   }
