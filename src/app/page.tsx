@@ -18,8 +18,21 @@ export default function Home() {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   
+  const [apiKey, setApiKey] = useState("");
+  const [needsApiKey, setNeedsApiKey] = useState(false);
+  
   const clientRef = useRef<GeminiClient | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Check local storage for API key on mount
+    const savedKey = localStorage.getItem("gemini_api_key");
+    if (savedKey) {
+      setApiKey(savedKey);
+    } else {
+      setNeedsApiKey(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (transcriptEndRef.current) {
@@ -27,22 +40,30 @@ export default function Home() {
     }
   }, [transcripts]);
 
+  const saveApiKey = () => {
+    if (apiKey.trim()) {
+      localStorage.setItem("gemini_api_key", apiKey.trim());
+      setNeedsApiKey(false);
+    }
+  };
+
   const startConversation = async () => {
     try {
+      if (!apiKey) {
+        setNeedsApiKey(true);
+        return;
+      }
+
       setSessionState("connecting");
       setErrorMsg("");
       setTranscripts([]);
-      
-      const res = await fetch("/api/env");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       
       const name1 = SUPPORTED_LANGUAGES.find(l => l.code === lang1)?.name || lang1;
       const name2 = SUPPORTED_LANGUAGES.find(l => l.code === lang2)?.name || lang2;
       
       const systemInstruction = `You are a bilingual real-time translator. The two people talking are speaking ${name1} and ${name2}. Listen carefully, detect which language is being spoken, and immediately translate it naturally to the other language. Speak the translation out loud. Keep it conversational and concise. Do not add any extra commentary.`;
       
-      const client = new GeminiClient(data.apiKey, systemInstruction);
+      const client = new GeminiClient(apiKey, systemInstruction);
       clientRef.current = client;
       
       client.onStateChange = (state) => setSessionState(state);
@@ -92,7 +113,29 @@ export default function Home() {
           </h1>
         </div>
 
-        {sessionState === "idle" && (
+        {needsApiKey ? (
+          <div className="card enter-d1" style={{ display: "flex", flexDirection: "column", gap: 16, textAlign: "left" }}>
+            <h2 className="heading-lg">Clé API requise</h2>
+            <p className="body-sm" style={{ color: "var(--fg-ghost)" }}>
+              Pour utiliser cette application directement depuis GitHub Pages, veuillez entrer votre clé API Gemini. 
+              Elle sera sauvegardée <b>uniquement</b> sur votre téléphone.
+            </p>
+            <div>
+              <label className="label" style={{ display: "block", marginBottom: 8 }}>Clé API Gemini</label>
+              <input 
+                type="password" 
+                className="select-field" 
+                value={apiKey} 
+                onChange={(e) => setApiKey(e.target.value)} 
+                placeholder="AIzaSy..." 
+                style={{ width: "100%", padding: "12px 16px", borderRadius: 12, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "white" }}
+              />
+            </div>
+            <button className="btn btn-primary" onClick={saveApiKey} style={{ marginTop: 8 }}>
+              Enregistrer
+            </button>
+          </div>
+        ) : sessionState === "idle" ? (
           <div className="card enter-d1" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{ flex: 1 }}>
@@ -118,9 +161,20 @@ export default function Home() {
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
               Démarrer la conversation
             </button>
+            
+            <div style={{ marginTop: 8 }}>
+              <button 
+                className="btn-text" 
+                onClick={() => setNeedsApiKey(true)}
+                style={{ fontSize: 12, color: "var(--fg-ghost)", background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}
+              >
+                Changer de clé API
+              </button>
+            </div>
+            
             {errorMsg && <p className="body-sm" style={{ color: "var(--error)", marginTop: 8 }}>{errorMsg}</p>}
           </div>
-        )}
+        ) : null}
 
         {(sessionState === "connecting" || sessionState === "connected") && (
           <div className="card enter">
