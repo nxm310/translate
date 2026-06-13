@@ -1,83 +1,238 @@
-# Gemini Live API Examples
+# Live Translate
 
-The Live API enables low-latency, real-time voice and video interactions with
-Gemini. It processes continuous streams of audio, video, or text to deliver
-immediate, human-like spoken responses, creating a natural conversational
-experience for your users.
+Real-time broadcast translation powered by the Gemini Live API and LiveKit.
 
-![Live API Overview](https://ai.google.dev/gemini-api/docs/images/live-api-overview.png)
+An organizer speaks into their mic — attendees pick a language and hear a live AI translation. Each language spins up exactly one Gemini Live API session, shared across all listeners requesting that language.
 
-[Try the Live API in Google AI Studio](https://aistudio.google.com/live)
+## How it works
 
-## Example use cases
+```
+Organizer → publishes audio → LiveKit room
+                                  ↓
+              TranslationBridge (per language)
+              joins room as bot, subscribes to organizer audio
+                                  ↓
+              Gemini Live API (translationConfig)
+              directionalTranslation → targetLanguageCode
+                                  ↓
+              Translated audio published back to LiveKit
+                                  ↓
+Attendee → subscribes to translator-{lang} audio track
+```
 
-Live API can be used to build real-time voice and video agents for a
-variety of industries, including:
+## Prerequisites
 
-*   **E-commerce and retail:** Shopping assistants that offer personalized
-    recommendations and support agents that resolve customer issues.
-*   **Gaming:** Interactive non-player characters (NPCs), in-game help
-    assistants, and real-time translation of in-game content.
-*   **Next-gen interfaces:** Voice- and video-enabled experiences in robotics,
-    smart glasses, and vehicles.
-*   **Healthcare:** Health companions for patient support and education.
-*   **Financial services:** AI advisors for wealth management and investment
-    guidance.
-*   **Education:** AI mentors and learner companions that provide personalized
-    instruction and feedback.
+- Node.js 18+
+- A [Gemini API key](https://aistudio.google.com/apikey)
+- A running LiveKit server (local or cloud)
 
-## Key features
+## Setup
 
-Live API offers a comprehensive set of features for building
-robust voice and video agents:
+### 1. Install dependencies
 
-*   [**Multilingual support**](https://ai.google.dev/gemini-api/docs/live-guide#supported-languages):
-    Converse in 70 supported languages.
-*   [**Barge-in**](https://ai.google.dev/gemini-api/docs/live-guide#interruptions):
-    Users can interrupt the model at any time for responsive interactions.
-*   [**Tool use**](https://ai.google.dev/gemini-api/docs/live-tools):
-    Integrates tools like function calling and Google Search for dynamic
-    interactions.
-*   [**Audio transcriptions**](https://ai.google.dev/gemini-api/docs/live-guide#audio-transcription):
-    Provides text transcripts of both user input and model output.
-*   [**Proactive audio**](https://ai.google.dev/gemini-api/docs/live-guide#proactive-audio):
-    Lets you control when the model responds and in what contexts.
-*   [**Affective dialog**](https://ai.google.dev/gemini-api/docs/live-guide#affective-dialog):
-    Adapts response style and tone to match the user's input expression.
+```bash
+npm install
+```
 
-## Technical specifications
+### 2. Start a local LiveKit server
 
-The following table outlines the technical specifications for the
-Live API:
+The easiest way is with Docker:
 
-| Category          | Details                                                                                     |
-| :---------------- | :------------------------------------------------------------------------------------------ |
-| Input modalities  | Audio (raw 16-bit PCM audio, 16kHz, little-endian), images/video (JPEG <= 1FPS), text       |
-| Output modalities | Audio (raw 16-bit PCM audio, 24kHz, little-endian), text                                    |
-| Protocol          | Stateful WebSocket connection (WSS)                                                         |
+```bash
+docker run -d \
+  --name livekit \
+  -p 7880:7880 \
+  -p 7881:7881 \
+  -p 7882:7882/udp \
+  -e LIVEKIT_KEYS="devkey: secret" \
+  livekit/livekit-server \
+  --dev
+```
 
-## Examples
+Or install the LiveKit CLI and run locally:
 
-*   **[Gen AI SDK Python example](./gemini-live-genai-python-sdk/README.md)**: Recommended for ease of use. Connect to the Gemini Live API using the Gen AI SDK to build a real-time multimodal application with a Python backend.
-*   **[Epheremal tokens and raw WebSocket example](./gemini-live-ephemeral-tokens-websocket/README.md)**: RAW protocol control. Connect to the Gemini Live API using WebSockets to build a real-time multimodal application with a JavaScript frontend and a Python backend.
-*   **[Command-line Python example](./command-line/python/README.md)**: A minimal command-line app that streams microphone audio to the Gemini Live API and plays back the response in real time using Python.
-*   **[Command-line Node.js example](./command-line/node/README.md)**: A minimal command-line app that streams microphone audio to the Gemini Live API and plays back the response in real time using Node.js.
-*   **[Command-line Translation Python example](./command-line/python/README.md#real-time-audio-stream-translation)**: A command-line tool that streams a remote audio URL into the Gemini Live Translate model, plays back the translated audio, and prints transcripts with language codes in real time.
-*   **[Broadcast Translation Web App (LiveKit)](../gemini-live-translate-livekit/README.md)**: A production-ready multilingual broadcast app built with Next.js, LiveKit, and the Gemini Live API that translates speaker audio to multiple target languages concurrently with low latency.
+```bash
+# Install (macOS)
+brew update && brew install livekit
 
-> [!TIP]
-> Install the [Gemini Live API Dev](https://github.com/google-gemini/gemini-skills?tab=readme-ov-file#gemini-live-api-dev) skill for AI-assisted development with the Live API in your coding agents.
+# Run
+livekit-server --dev --bind 0.0.0.0
+```
 
-## Partner integrations
+The default dev keys are `devkey` / `secret`, matching `.env.local`.
 
-To streamline the development of real-time audio and video apps, you can use
-a third-party integration that supports the Gemini Live
-API over WebRTC or WebSockets.
+### 3. Configure environment
 
-*   [LiveKit](https://docs.livekit.io/agents/models/realtime/plugins/gemini/): Use the Gemini Live API with LiveKit Agents.
-*   [Pipecat by Daily](https://docs.pipecat.ai/guides/features/gemini-live): Create a real-time AI chatbot using Gemini Live and Pipecat.
-*   [Fishjam by Software Mansion](https://docs.fishjam.io/tutorials/gemini-live-integration): Create live video and audio streaming applications with Fishjam.
-*   [Vision Agents by Stream](https://visionagents.ai/integrations/gemini): Build real-time voice and video AI applications with Vision Agents.
-*   [Voximplant](https://voximplant.com/products/gemini-client): Connect inbound and outbound calls to Live API with Voximplant.
-*   [Agent Development Kit (ADK)](https://google.github.io/adk-docs/streaming/): Create an agent and use the Agent Development Kit (ADK) Streaming to enable voice and video communication.
-*   [Firebase AI SDK](https://firebase.google.com/docs/ai-logic/live-api?api=dev): Get started with the Gemini Live API using Firebase AI Logic.
+Edit `.env.local`:
+
+```env
+LIVEKIT_API_KEY=devkey
+LIVEKIT_API_SECRET=secret
+NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
+LIVEKIT_URL=ws://localhost:7880
+GEMINI_API_KEY=your-gemini-api-key-here
+```
+
+### 4. Run the app
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## Deploy to Cloud Run
+
+We recommend deploying to Google Cloud Run since the translation bridges are long-running processes (WebSocket connections to Gemini and LiveKit) that require persistent containers and support for long-running requests.
+
+### Prerequisites
+
+- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`)
+- A [LiveKit Cloud](https://cloud.livekit.io) account (free tier: 50 participant-hours/month)
+
+### Deploy
+
+First, create secrets in Google Secret Manager (reads values from your `.env.local`):
+
+```bash
+source <(grep -v '^#' .env.local | sed 's/^/export /')
+
+echo -n "$GEMINI_API_KEY" | gcloud secrets create gemini-api-key --data-file=-
+echo -n "$LIVEKIT_API_KEY" | gcloud secrets create livekit-api-key --data-file=-
+echo -n "$LIVEKIT_API_SECRET" | gcloud secrets create livekit-api-secret --data-file=-
+```
+
+Then deploy:
+
+```bash
+gcloud run deploy live-translate \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --min-instances 1 \
+  --max-instances 1 \
+  --timeout 3600 \
+  --no-cpu-throttling \
+  --set-secrets "\
+GEMINI_API_KEY=gemini-api-key:latest,\
+LIVEKIT_API_KEY=livekit-api-key:latest,\
+LIVEKIT_API_SECRET=livekit-api-secret:latest" \
+  --set-env-vars "\
+NEXT_PUBLIC_LIVEKIT_URL=wss://your-project.livekit.cloud,\
+LIVEKIT_URL=wss://your-project.livekit.cloud"
+```
+
+Key settings:
+- `--set-secrets` — injects secrets from Secret Manager at runtime (never stored in the image or Cloud Run config)
+- `--min-instances 1` — keeps the container warm so active sessions aren't killed
+- `--max-instances 1` — the `TranslationSessionManager` singleton requires a single instance
+- `--timeout 3600` — allows sessions up to 1 hour
+- `--no-cpu-throttling` — keeps CPU allocated between requests (needed for audio processing)
+
+### Authentication (optional)
+
+To restrict access to specific Google accounts, enable Identity-Aware Proxy (IAP). This adds a Google Sign-In page — only authorized users can access the app.
+
+```bash
+gcloud run services update live-translate --region us-central1 --iap
+```
+
+See [docs/authentication.md](docs/authentication.md) for full setup instructions.
+
+## Usage
+
+1. Click **Create session** — you'll be taken to the broadcast page
+2. Allow microphone access and start speaking
+3. Share the QR code (or URL) with attendees
+4. Attendees open the link, pick a language from the dropdown
+5. The server spins up a Gemini Live API translation bridge for that language
+6. Subsequent attendees requesting the same language share the existing bridge
+
+## Project structure
+
+```
+src/
+├── app/
+│   ├── api/
+│   │   ├── sessions/          # Create/list/delete sessions
+│   │   ├── token/             # LiveKit token generation
+│   │   └── translate/         # Request translations, check status
+│   ├── session/[id]/
+│   │   ├── broadcast/         # Organizer view
+│   │   └── watch/             # Attendee view + language selector
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx               # Landing page
+├── components/
+│   └── SessionQRCode.tsx
+└── lib/
+    ├── languages.ts                    # Supported languages
+    ├── translation-bridge.ts           # LiveKit ↔ Gemini bridge
+    └── translation-session-manager.ts  # Singleton: max 1 session/lang
+```
+
+## Key design decisions
+
+- **Audio only** — no video, keeps things simple and bandwidth-light
+- **`translationConfig`** — uses Gemini's native directional translation, not prompt-based
+- **`@livekit/rtc-node`** — server-side bot joins the room programmatically (not a browser)
+- **Singleton per language** — `TranslationSessionManager` ensures at most one Gemini session per language per room
+- **Attendee audio switching** — client uses `setSubscribed()` to subscribe only to the selected translator bot's audio track
+- **Reliable transcription delivery** — transcriptions are sent via `publishData` (reliable data channel), not tied to audio track subscription state
+- **Tab close cleanup** — `navigator.sendBeacon()` fires on `beforeunload` to decrement subscriber counts and tear down idle Gemini sessions
+- **Serial audio frame queue** — `captureFrame` calls are chained via a promise chain to avoid frame pile-up in the AudioSource FFI layer
+
+## Architecture & scaling
+
+### Current design (demo)
+
+All participants — organizer, translator bots, and attendees — share a **single LiveKit room**. Attendees use `setSubscribed()` to hear only their selected language.
+
+```
+                    ┌─────────────────────┐
+                    │    LiveKit Room      │
+                    │                     │
+  Organizer ──────▶ │  translator-fr ─┐   │ ◀── Attendee (FR)
+                    │  translator-de ─┤   │ ◀── Attendee (DE)
+                    │  translator-zh ─┘   │ ◀── Attendee (ZH)
+                    └─────────────────────┘
+```
+
+**This works well for:**
+- Up to ~15-20 simultaneous languages
+- Up to ~50 attendees on a dev server, or ~200-300 on LiveKit Cloud
+
+**Limitations:**
+- **Signaling fan-out is O(n)**: every participant join/leave notifies all others. With 1000 attendees, each join sends ~1000 signaling messages.
+- **Track publication overhead**: each attendee receives metadata for all published tracks (even the ones they don't subscribe to).
+- **Single Node.js process**: all Gemini WebSocket connections and audio pipelines run in one process.
+
+### Recommended production architecture
+
+For large-scale deployments (100+ attendees, 20+ languages), use a **3-tier design** with per-language delivery rooms:
+
+```
+Tier 1 — Ingestion            Tier 2 — Translation         Tier 3 — Delivery
+┌──────────────┐             ┌──────────────────┐         ┌─────────────────┐
+│  Main Room   │             │  Worker (FR)     │         │  Room: sess-fr  │
+│              │  subscribe  │  Gemini Live API │ publish │                 │
+│  Organizer ──┼────────────▶│  FR translation  ├────────▶│  67 attendees   │
+│  (publishes  │             └──────────────────┘         └─────────────────┘
+│   audio)     │             ┌──────────────────┐         ┌─────────────────┐
+│              │  subscribe  │  Worker (DE)     │ publish │  Room: sess-de  │
+│              ├────────────▶│  Gemini Live API ├────────▶│  67 attendees   │
+│              │             └──────────────────┘         └─────────────────┘
+│              │             ┌──────────────────┐         ┌─────────────────┐
+│              │  subscribe  │  Worker (ZH)     │ publish │  Room: sess-zh  │
+│              ├────────────▶│  Gemini Live API ├────────▶│  67 attendees   │
+└──────────────┘             └──────────────────┘         └─────────────────┘
+```
+
+**Benefits:**
+- **Isolated failure domains** — a worker crash only affects one language
+- **Horizontal scaling** — workers are stateless, deploy via Kubernetes/Cloud Run
+- **No signaling storm** — each delivery room has 1 publisher + N attendees (no N² problem)
+- **Unlimited languages** — each language is a separate, independently scaled room
+- **CDN-ready** — for 10K+ viewers, use LiveKit Egress → HLS → CDN on the delivery rooms
+
+**Tradeoff:** switching languages requires a room reconnection (~200ms audio gap), vs. instant subscription toggle in the single-room design.
