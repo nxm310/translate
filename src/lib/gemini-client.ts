@@ -58,7 +58,7 @@ export class GeminiClient {
   private setupSession() {
     const setupMessage = {
       setup: {
-        model: "models/gemini-2.0-flash",
+        model: "models/gemini-3.5-live-translate-preview",
         systemInstruction: {
           parts: [{ text: this.systemInstruction }],
         },
