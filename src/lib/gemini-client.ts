@@ -18,7 +18,7 @@ export class GeminiClient {
       await this.startAudio();
 
       // 2. Connect WebSocket
-      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {
@@ -58,7 +58,7 @@ export class GeminiClient {
   private setupSession() {
     const setupMessage = {
       setup: {
-        model: "models/gemini-2.0-flash",
+        model: "models/gemini-3.5-live-translate-preview",
         systemInstruction: {
           parts: [{ text: this.systemInstruction }],
         },
