@@ -97,7 +97,7 @@ export class GeminiClient {
   private async startAudio() {
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 16000,
+        sampleRate: 24000, // Gemini outputs at 24kHz, so we run the context at 24kHz
       });
 
       // Get basePath for GitHub Pages (/translate/) or empty for local
@@ -173,7 +173,7 @@ export class GeminiClient {
         realtimeInput: {
           mediaChunks: [
             {
-              mimeType: "audio/pcm;rate=16000",
+              mimeType: "audio/pcm;rate=24000",
               data: base64,
             },
           ],
