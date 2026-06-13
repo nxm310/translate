@@ -80,22 +80,6 @@ export class GeminiClient {
   private handleMessage(data: any) {
     if (data.setupComplete) {
       this.onStateChange("connected");
-      // Force the model to read the system instruction by sending it as the first message
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            clientContent: {
-              turns: [
-                {
-                  role: "user",
-                  parts: [{ text: "SYSTEM INSTRUCTION (READ CAREFULLY): " + this.systemInstruction }],
-                },
-              ],
-              turnComplete: true,
-            },
-          })
-        );
-      }
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
@@ -173,10 +157,19 @@ export class GeminiClient {
   private sendAudio(float32Data: Float32Array) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     
+    // Downsample from 24000Hz to 16000Hz (keep 2 out of 3 samples)
+    const downsampledLength = Math.floor(float32Data.length * 2 / 3);
+    const downsampled = new Float32Array(downsampledLength);
+    let outIdx = 0;
+    for (let i = 0; i < float32Data.length; i += 3) {
+      if (outIdx < downsampledLength) downsampled[outIdx++] = float32Data[i];
+      if (i + 1 < float32Data.length && outIdx < downsampledLength) downsampled[outIdx++] = float32Data[i + 1];
+    }
+
     // Float32 to PCM 16-bit
-    const int16Array = new Int16Array(float32Data.length);
-    for (let i = 0; i < float32Data.length; i++) {
-      let val = float32Data[i] * 32768.0;
+    const int16Array = new Int16Array(downsampled.length);
+    for (let i = 0; i < downsampled.length; i++) {
+      let val = downsampled[i] * 32768.0;
       val = Math.max(-32768, Math.min(32767, val));
       int16Array[i] = val;
     }
@@ -193,7 +186,7 @@ export class GeminiClient {
         realtimeInput: {
           mediaChunks: [
             {
-              mimeType: "audio/pcm;rate=24000",
+              mimeType: "audio/pcm;rate=16000",
               data: base64,
             },
           ],
