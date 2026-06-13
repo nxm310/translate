@@ -18,7 +18,7 @@ export class GeminiClient {
       await this.startAudio();
 
       // 2. Connect WebSocket
-      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {
@@ -34,14 +34,18 @@ export class GeminiClient {
         }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
+        console.error("WebSocket closed", event.code, event.reason);
+        if (event.code !== 1000 && event.code !== 1005) {
+          this.onError(`Erreur de connexion (${event.code}): ${event.reason || "Connexion rejetée par Gemini"}`);
+        }
         this.disconnect();
       };
 
       this.ws.onerror = (err) => {
         console.error("WebSocket error", err);
-        this.onError("Connection error");
-        this.disconnect();
+        // onError will be handled by onclose usually, but just in case:
+        this.onError("Erreur réseau WebSocket");
       };
 
     } catch (e) {
@@ -54,7 +58,7 @@ export class GeminiClient {
   private setupSession() {
     const setupMessage = {
       setup: {
-        model: "models/gemini-2.0-flash-exp",
+        model: "models/gemini-2.0-flash",
         systemInstruction: {
           parts: [{ text: this.systemInstruction }],
         },
