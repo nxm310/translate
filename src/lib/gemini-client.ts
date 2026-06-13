@@ -14,6 +14,10 @@ export class GeminiClient {
   async connect() {
     this.onStateChange("connecting");
     try {
+      // 1. Initialize Audio (must be done immediately on user click for iOS Safari)
+      await this.startAudio();
+
+      // 2. Connect WebSocket
       const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       this.ws = new WebSocket(url);
 
@@ -72,7 +76,6 @@ export class GeminiClient {
   private handleMessage(data: any) {
     if (data.setupComplete) {
       this.onStateChange("connected");
-      this.startAudio();
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
@@ -94,11 +97,14 @@ export class GeminiClient {
   private async startAudio() {
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 16000, // Gemini expects 16kHz
+        sampleRate: 16000,
       });
 
-      await this.audioContext.audioWorklet.addModule("/capture.worklet.js");
-      await this.audioContext.audioWorklet.addModule("/playback.worklet.js");
+      // Get basePath for GitHub Pages (/translate/) or empty for local
+      const basePath = window.location.pathname.startsWith('/translate') ? '/translate' : '';
+      
+      await this.audioContext.audioWorklet.addModule(`${basePath}/capture.worklet.js`);
+      await this.audioContext.audioWorklet.addModule(`${basePath}/playback.worklet.js`);
 
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -124,7 +130,7 @@ export class GeminiClient {
 
     } catch (e) {
       console.error("Audio error", e);
-      this.onError("Could not access microphone");
+      throw new Error("Veuillez autoriser l'accès au microphone dans les réglages de votre navigateur.");
     }
   }
 
