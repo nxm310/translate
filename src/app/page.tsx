@@ -61,7 +61,10 @@ export default function Home() {
       const name1 = SUPPORTED_LANGUAGES.find(l => l.code === lang1)?.name || lang1;
       const name2 = SUPPORTED_LANGUAGES.find(l => l.code === lang2)?.name || lang2;
       
-      const systemInstruction = `You are a bilingual real-time translator. The two people talking are speaking ${name1} and ${name2}. Listen carefully, detect which language is being spoken, and immediately translate it naturally to the other language. Speak the translation out loud. Keep it conversational and concise. Do not add any extra commentary.`;
+      const systemInstruction = `You are a strict bilingual real-time translator between ${name1} and ${name2}. You must NEVER speak any other language. 
+If you hear ${name1}, translate it directly to ${name2}. 
+If you hear ${name2}, translate it directly to ${name1}. 
+Do not answer questions, just translate. Do not add commentary. Speak the translation out loud.`;
       
       const client = new GeminiClient(apiKey, systemInstruction);
       clientRef.current = client;
