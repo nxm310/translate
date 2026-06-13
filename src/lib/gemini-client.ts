@@ -18,7 +18,7 @@ export class GeminiClient {
       await this.startAudio();
 
       // 2. Connect WebSocket
-      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {
@@ -54,7 +54,7 @@ export class GeminiClient {
   private setupSession() {
     const setupMessage = {
       setup: {
-        model: "models/gemini-3.5-live-translate-preview",
+        model: "models/gemini-2.0-flash-exp",
         systemInstruction: {
           parts: [{ text: this.systemInstruction }],
         },
@@ -76,6 +76,22 @@ export class GeminiClient {
   private handleMessage(data: any) {
     if (data.setupComplete) {
       this.onStateChange("connected");
+      // Force the model to read the system instruction by sending it as the first message
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            clientContent: {
+              turns: [
+                {
+                  role: "user",
+                  parts: [{ text: "SYSTEM INSTRUCTION (READ CAREFULLY): " + this.systemInstruction }],
+                },
+              ],
+              turnComplete: true,
+            },
+          })
+        );
+      }
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
