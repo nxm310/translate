@@ -137,22 +137,22 @@ export default function Home() {
           </div>
         ) : sessionState === "idle" ? (
           <div className="card enter-d1" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ flex: 1 }}>
-                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Moi</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ width: "100%" }}>
+                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Ma langue</label>
                 <select className="select-field" value={lang1} onChange={(e) => setLang1(e.target.value)}>
-                  {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name} {l.flag}</option>)}
+                  {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                 </select>
               </div>
               
-              <div style={{ padding: "0 8px", color: "var(--fg-ghost)", alignSelf: "flex-end", marginBottom: 12 }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3v18M10 10l7-7 7 7M7 21V3M14 14l-7 7-7-7"/></svg>
+              <div style={{ display: "flex", justifyContent: "center", color: "var(--fg-ghost)", padding: "4px 0" }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
               </div>
               
-              <div style={{ flex: 1 }}>
-                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Autre personne</label>
+              <div style={{ width: "100%" }}>
+                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Leur langue</label>
                 <select className="select-field" value={lang2} onChange={(e) => setLang2(e.target.value)}>
-                  {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name} {l.flag}</option>)}
+                  {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                 </select>
               </div>
             </div>
