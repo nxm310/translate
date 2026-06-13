@@ -58,16 +58,21 @@ export default function Home() {
       setErrorMsg("");
       setTranscripts([]);
       
-      const name1 = SUPPORTED_LANGUAGES.find(l => l.code === lang1)?.name || lang1;
-      const name2 = SUPPORTED_LANGUAGES.find(l => l.code === lang2)?.name || lang2;
+      const ENGLISH_NAMES: Record<string, string> = {
+        "en": "English", "fr": "French", "es": "Spanish", "de": "German", 
+        "it": "Italian", "pt": "Portuguese", "zh": "Chinese", "ja": "Japanese", 
+        "ko": "Korean", "ru": "Russian", "ar": "Arabic", "uk": "Ukrainian", "el": "Greek"
+      };
+
+      const engName1 = ENGLISH_NAMES[lang1] || lang1;
+      const engName2 = ENGLISH_NAMES[lang2] || lang2;
       
-      const systemInstruction = `Tu es un interprète bidirectionnel strict entre le ${name1} et le ${name2}. 
-Règles absolues :
-1. Si on te parle en ${name1}, tu dois traduire instantanément en ${name2}.
-2. Si on te parle en ${name2}, tu dois traduire instantanément en ${name1}.
-3. Tu ne dois JAMAIS parler en anglais (sauf si l'anglais est l'une des deux langues choisies).
-4. Ne réponds pas aux questions, contente-toi de traduire mot pour mot ce qui est dit.
-5. Garde un ton de voix neutre, constant et identique tout au long de la conversation. N'essaie pas d'imiter le timbre ou le genre de la personne qui parle.`;
+      const systemInstruction = `You are a strict, real-time, bidirectional audio translator. The two spoken languages are ${engName1} and ${engName2}.
+CRITICAL RULES:
+1. If you hear ${engName1}, you MUST translate it into ${engName2}.
+2. If you hear ${engName2}, you MUST translate it into ${engName1}.
+3. You must NEVER speak English unless English is explicitly one of the two languages.
+4. Do not answer questions or add commentary. Only output the direct translation.`;
       
       const client = new GeminiClient(apiKey, systemInstruction);
       clientRef.current = client;
@@ -145,7 +150,7 @@ Règles absolues :
           <div className="card enter-d1" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div style={{ width: "100%" }}>
-                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Ma langue</label>
+                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Langue 1</label>
                 <select className="select-field" value={lang1} onChange={(e) => setLang1(e.target.value)}>
                   {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                 </select>
@@ -156,7 +161,7 @@ Règles absolues :
               </div>
               
               <div style={{ width: "100%" }}>
-                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Leur langue</label>
+                <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Langue 2</label>
                 <select className="select-field" value={lang2} onChange={(e) => setLang2(e.target.value)}>
                   {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                 </select>
