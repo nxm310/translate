@@ -8,6 +8,7 @@ interface Transcript {
   id: string;
   text: string;
   isFinal: boolean;
+  lang: string;
 }
 
 export default function Home() {
@@ -58,35 +59,18 @@ export default function Home() {
       setErrorMsg("");
       setTranscripts([]);
       
-      const ENGLISH_NAMES: Record<string, string> = {
-        "en": "English", "fr": "French", "es": "Spanish", "de": "German", 
-        "it": "Italian", "pt": "Portuguese", "zh": "Chinese", "ja": "Japanese", 
-        "ko": "Korean", "ru": "Russian", "ar": "Arabic", "uk": "Ukrainian", "el": "Greek"
-      };
-
-      const engName1 = ENGLISH_NAMES[lang1] || lang1;
-      const engName2 = ENGLISH_NAMES[lang2] || lang2;
-      
-      const systemInstruction = `You are a strict, real-time, bidirectional audio translator. The two spoken languages are ${engName1} and ${engName2}.
-CRITICAL RULES:
-1. If you hear ${engName1}, you MUST translate it into ${engName2}.
-2. If you hear ${engName2}, you MUST translate it into ${engName1}.
-3. You must NEVER speak English unless English is explicitly one of the two languages.
-4. Do not answer questions or add commentary. Only output the direct translation.`;
-      
-      const client = new GeminiClient(apiKey, systemInstruction);
+      const client = new GeminiClient(apiKey, lang1, lang2);
       clientRef.current = client;
       
       client.onStateChange = (state) => setSessionState(state);
       client.onError = (err) => setErrorMsg(err);
       
-      let currentId = Date.now().toString();
-      client.onTranscript = (text, isFinal) => {
+      client.onTranscript = (text, isFinal, targetLang) => {
         setTranscripts((prev) => {
           const last = prev[prev.length - 1];
-          if (!last || last.isFinal) {
-            currentId = Date.now().toString();
-            return [...prev, { id: currentId, text, isFinal }];
+          if (!last || last.isFinal || last.lang !== targetLang) {
+            const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+            return [...prev, { id, text, isFinal, lang: targetLang }];
           } else {
             const updated = [...prev];
             updated[updated.length - 1] = { ...last, text: last.text + " " + text, isFinal };
@@ -207,11 +191,16 @@ CRITICAL RULES:
                   <p className="body-sm italic" style={{ opacity: 0.5 }}>Posez le téléphone entre vous et parlez.</p>
                 </div>
               ) : (
-                transcripts.map((t, i) => (
-                  <div key={`${t.id}-${i}`} className={`transcript-bubble ${!t.isFinal ? "partial" : ""}`}>
-                    {t.text}
-                  </div>
-                ))
+                transcripts.map((t, i) => {
+                  const langObj = SUPPORTED_LANGUAGES.find(l => l.code === t.lang);
+                  const flag = langObj ? langObj.flag : "";
+                  return (
+                    <div key={`${t.id}-${i}`} className={`transcript-bubble ${!t.isFinal ? "partial" : ""}`} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 20 }}>{flag}</span>
+                      <div style={{ flex: 1 }}>{t.text}</div>
+                    </div>
+                  );
+                })
               )}
               <div ref={transcriptEndRef} />
             </div>

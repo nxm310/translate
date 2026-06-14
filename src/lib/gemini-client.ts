@@ -1,52 +1,65 @@
 export class GeminiClient {
-  private ws: WebSocket | null = null;
+  private ws1: WebSocket | null = null;
+  private ws2: WebSocket | null = null;
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private captureNode: AudioWorkletNode | null = null;
   private playbackNode: AudioWorkletNode | null = null;
-  
+
+  private ws1Ready = false;
+  private ws2Ready = false;
+
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
-  public onTranscript: (text: string, isFinal: boolean) => void = () => {};
+  public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
   public onError: (error: string) => void = () => {};
 
-  constructor(private apiKey: string, private systemInstruction: string) {}
+  constructor(
+    private apiKey: string,
+    private lang1: string,
+    private lang2: string
+  ) {}
 
   async connect() {
     this.onStateChange("connecting");
+    this.ws1Ready = false;
+    this.ws2Ready = false;
+
     try {
       // 1. Initialize Audio (must be done immediately on user click for iOS Safari)
       await this.startAudio();
 
-      // 2. Connect WebSocket
+      // 2. Connect two WebSockets — one per translation direction
       const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
-      this.ws = new WebSocket(url);
 
-      this.ws.onopen = () => {
-        this.setupSession();
+      // WS1: translates INTO lang1 (e.g. when someone speaks lang2, output is lang1)
+      this.ws1 = new WebSocket(url);
+      this.ws1.onopen = () => this.setupSession(this.ws1, this.lang1, "Aoede");
+      this.ws1.onmessage = async (event) => {
+        const text = event.data instanceof Blob ? await event.data.text() : event.data;
+        this.handleMessage(JSON.parse(text), this.lang1);
       };
-
-      this.ws.onmessage = async (event) => {
-        if (event.data instanceof Blob) {
-          const text = await event.data.text();
-          this.handleMessage(JSON.parse(text));
-        } else if (typeof event.data === "string") {
-          this.handleMessage(JSON.parse(event.data));
-        }
-      };
-
-      this.ws.onclose = (event) => {
-        console.error("WebSocket closed", event.code, event.reason);
+      this.ws1.onclose = (event) => {
         if (event.code !== 1000 && event.code !== 1005) {
           this.onError(`Erreur de connexion (${event.code}): ${event.reason || "Connexion rejetée par Gemini"}`);
         }
         this.disconnect();
       };
+      this.ws1.onerror = () => this.onError("Erreur réseau WebSocket");
 
-      this.ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-        // onError will be handled by onclose usually, but just in case:
-        this.onError("Erreur réseau WebSocket");
+      // WS2: translates INTO lang2 (e.g. when someone speaks lang1, output is lang2)
+      this.ws2 = new WebSocket(url);
+      this.ws2.onopen = () => this.setupSession(this.ws2, this.lang2, "Puck");
+      this.ws2.onmessage = async (event) => {
+        const text = event.data instanceof Blob ? await event.data.text() : event.data;
+        this.handleMessage(JSON.parse(text), this.lang2);
       };
+      this.ws2.onclose = (event) => {
+        if (event.code !== 1000 && event.code !== 1005) {
+          this.onError(`Erreur de connexion (${event.code}): ${event.reason || "Connexion rejetée par Gemini"}`);
+        }
+        this.disconnect();
+      };
+      this.ws2.onerror = () => this.onError("Erreur réseau WebSocket");
 
     } catch (e) {
       console.error(e);
@@ -55,37 +68,46 @@ export class GeminiClient {
     }
   }
 
-  private setupSession() {
+  private setupSession(ws: WebSocket | null, targetLang: string, voiceName: string) {
     const setupMessage = {
       setup: {
         model: "models/gemini-3.5-live-translate-preview",
-        systemInstruction: {
-          parts: [{ text: this.systemInstruction }],
-        },
         generationConfig: {
           responseModalities: ["AUDIO"],
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: "Aoede",
+                voiceName: voiceName,
               },
             },
           },
+          translationConfig: {
+            targetLanguageCode: targetLang,
+            echoTargetLanguage: false,
+          },
+        },
+        realtimeInputConfig: {
+          activityHandling: "NO_INTERRUPTION",
         },
       },
     };
-    this.ws?.send(JSON.stringify(setupMessage));
+    ws?.send(JSON.stringify(setupMessage));
   }
 
-  private handleMessage(data: any) {
+  private handleMessage(data: any, targetLang: string) {
     if (data.setupComplete) {
-      this.onStateChange("connected");
+      if (targetLang === this.lang1) this.ws1Ready = true;
+      if (targetLang === this.lang2) this.ws2Ready = true;
+
+      if (this.ws1Ready && this.ws2Ready) {
+        this.onStateChange("connected");
+      }
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
         for (const part of modelTurn.parts) {
           if (part.text) {
-            this.onTranscript(part.text, true);
+            this.onTranscript(part.text, true, targetLang);
           }
           if (part.inlineData && part.inlineData.data) {
             this.playAudio(part.inlineData.data);
@@ -106,7 +128,7 @@ export class GeminiClient {
 
       // Get basePath for GitHub Pages (/translate/) or empty for local
       const basePath = window.location.pathname.startsWith('/translate') ? '/translate' : '';
-      
+
       await this.audioContext.audioWorklet.addModule(`${basePath}/capture.worklet.js`);
       await this.audioContext.audioWorklet.addModule(`${basePath}/playback.worklet.js`);
 
@@ -155,8 +177,10 @@ export class GeminiClient {
   }
 
   private sendAudio(float32Data: Float32Array) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    
+    const ws1Open = this.ws1 && this.ws1.readyState === WebSocket.OPEN;
+    const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
+    if (!ws1Open && !ws2Open) return;
+
     // Downsample from 24000Hz to 16000Hz (keep 2 out of 3 samples)
     const downsampledLength = Math.floor(float32Data.length * 2 / 3);
     const downsampled = new Float32Array(downsampledLength);
@@ -181,25 +205,34 @@ export class GeminiClient {
     }
     const base64 = btoa(binary);
 
-    this.ws.send(
-      JSON.stringify({
-        realtimeInput: {
-          mediaChunks: [
-            {
-              mimeType: "audio/pcm;rate=16000",
-              data: base64,
-            },
-          ],
-        },
-      })
-    );
+    const audioMessage = JSON.stringify({
+      realtimeInput: {
+        mediaChunks: [
+          {
+            mimeType: "audio/pcm;rate=16000",
+            data: base64,
+          },
+        ],
+      },
+    });
+
+    // Send same audio to both connections
+    if (ws1Open) this.ws1!.send(audioMessage);
+    if (ws2Open) this.ws2!.send(audioMessage);
   }
 
   disconnect() {
     this.onStateChange("idle");
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    this.ws1Ready = false;
+    this.ws2Ready = false;
+
+    if (this.ws1) {
+      this.ws1.close();
+      this.ws1 = null;
+    }
+    if (this.ws2) {
+      this.ws2.close();
+      this.ws2 = null;
     }
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach((t) => t.stop());
