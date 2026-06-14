@@ -92,9 +92,9 @@ export class GeminiClient {
             targetLanguageCode: targetLang,
             echoTargetLanguage: false,
           },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
-        inputTranscription: {},
-        outputTranscription: {},
         realtimeInputConfig: {
           activityHandling: "NO_INTERRUPTION",
         },
