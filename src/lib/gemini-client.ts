@@ -13,7 +13,7 @@ export class GeminiClient {
   private isSpeaking = false;
 
   private pendingInputTranscripts = new Map<string, string>();
-  private pendingOutputTranscripts = new Map<string, string>();
+  private hasTranslationActive = new Map<string, boolean>();
 
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
@@ -93,8 +93,8 @@ export class GeminiClient {
             echoTargetLanguage: false,
           },
         },
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
+        inputTranscription: {},
+        outputTranscription: {},
         realtimeInputConfig: {
           activityHandling: "NO_INTERRUPTION",
         },
@@ -115,22 +115,49 @@ export class GeminiClient {
       // 1. Accumulate input transcription (what the user said in the source language)
       if (data.serverContent.inputTranscription && data.serverContent.inputTranscription.text) {
         const current = this.pendingInputTranscripts.get(targetLang) || "";
-        this.pendingInputTranscripts.set(targetLang, current + data.serverContent.inputTranscription.text);
+        const newText = current + data.serverContent.inputTranscription.text;
+        this.pendingInputTranscripts.set(targetLang, newText);
+
+        // If this channel is already active, dispatch the input transcript immediately
+        if (this.hasTranslationActive.get(targetLang)) {
+          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+          this.onTranscript(newText, true, sourceLang);
+          this.pendingInputTranscripts.delete(targetLang);
+        }
       }
 
-      // 2. Accumulate output transcription (the translation text)
+      // 2. Accumulate and dispatch output transcription (the translation text)
       if (data.serverContent.outputTranscription && data.serverContent.outputTranscription.text) {
-        const current = this.pendingOutputTranscripts.get(targetLang) || "";
-        this.pendingOutputTranscripts.set(targetLang, current + data.serverContent.outputTranscription.text);
+        this.hasTranslationActive.set(targetLang, true);
+
+        // Dispatch any pending input transcript first
+        const pendingInput = this.pendingInputTranscripts.get(targetLang);
+        if (pendingInput) {
+          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+          this.onTranscript(pendingInput, true, sourceLang);
+          this.pendingInputTranscripts.delete(targetLang);
+        }
+
+        // Output the translation transcript
+        this.onTranscript(data.serverContent.outputTranscription.text, true, targetLang);
       }
 
-      // 3. Accumulate modelTurn parts (audio and fallback text translation)
+      // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
+        this.hasTranslationActive.set(targetLang, true);
+
+        // Dispatch any pending input transcript first
+        const pendingInput = this.pendingInputTranscripts.get(targetLang);
+        if (pendingInput) {
+          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+          this.onTranscript(pendingInput, true, sourceLang);
+          this.pendingInputTranscripts.delete(targetLang);
+        }
+
         for (const part of modelTurn.parts) {
           if (part.text) {
-            const current = this.pendingOutputTranscripts.get(targetLang) || "";
-            this.pendingOutputTranscripts.set(targetLang, current + part.text);
+            this.onTranscript(part.text, true, targetLang);
           }
           if (part.inlineData && part.inlineData.data) {
             this.playAudio(part.inlineData.data);
@@ -138,28 +165,24 @@ export class GeminiClient {
         }
       }
 
-      // 4. Upon turn completion, dispatch both transcripts if this was the active channel
+      // 4. Upon turn completion, clear state and dispatch any final delayed input
       if (data.serverContent.turnComplete) {
-        const input = this.pendingInputTranscripts.get(targetLang);
-        const output = this.pendingOutputTranscripts.get(targetLang);
-
-        if (output) {
-          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-          if (input) {
-            this.onTranscript(input, true, sourceLang);
+        if (this.hasTranslationActive.get(targetLang)) {
+          const pendingInput = this.pendingInputTranscripts.get(targetLang);
+          if (pendingInput) {
+            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+            this.onTranscript(pendingInput, true, sourceLang);
           }
-          this.onTranscript(output, true, targetLang);
         }
-
         this.pendingInputTranscripts.delete(targetLang);
-        this.pendingOutputTranscripts.delete(targetLang);
+        this.hasTranslationActive.delete(targetLang);
       }
 
       if (data.serverContent.interrupted) {
         this.playbackNode?.port.postMessage("interrupt");
         this.isSpeaking = false;
         this.pendingInputTranscripts.delete(targetLang);
-        this.pendingOutputTranscripts.delete(targetLang);
+        this.hasTranslationActive.delete(targetLang);
       }
     }
   }
@@ -294,7 +317,7 @@ export class GeminiClient {
     this.ws2Ready = false;
     this.isSpeaking = false;
     this.pendingInputTranscripts.clear();
-    this.pendingOutputTranscripts.clear();
+    this.hasTranslationActive.clear();
     this.onVolumeChange(0);
 
     if (this.ws1) {
