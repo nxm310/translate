@@ -10,13 +10,19 @@ class PCMProcessor extends AudioWorkletProcessor {
     this.isPlaying = false;
     this.loggedEmptyOutput = false;
     this.isPlayingAudioLog = false;
+    this.isBuffering = true;
+    this.minBufferCount = 2; // Buffer 2 chunks (500ms) to smooth out network jitter
 
     this.port.onmessage = (event) => {
       if (event.data === "interrupt") {
         this.audioQueue = [];
         this.currentOffset = 0;
+        this.isBuffering = true;
         this.updatePlaybackState(false);
         this.port.postMessage({ type: "log", message: "Playback interrupted" });
+      } else if (event.data === "turnComplete") {
+        this.isBuffering = false;
+        this.port.postMessage({ type: "log", message: "Turn complete: flushing buffer" });
       } else if (event.data) {
         const isF32 = event.data instanceof Float32Array;
         const constrName = event.data.constructor?.name;
@@ -41,6 +47,10 @@ class PCMProcessor extends AudioWorkletProcessor {
 
         if (samples && samples.length > 0) {
           this.audioQueue.push(samples);
+          if (this.isBuffering && this.audioQueue.length >= this.minBufferCount) {
+            this.isBuffering = false;
+            this.port.postMessage({ type: "log", message: `Buffered ${this.audioQueue.length} chunks, starting playback` });
+          }
           this.updatePlaybackState(true);
         }
       }
@@ -67,6 +77,17 @@ class PCMProcessor extends AudioWorkletProcessor {
     const numChannels = output.length;
     const bufferSize = output[0].length;
     let outputIndex = 0;
+
+    // Output silence while buffering to prevent gaps
+    if (this.isBuffering) {
+      while (outputIndex < bufferSize) {
+        for (let c = 0; c < numChannels; c++) {
+          output[c][outputIndex] = 0;
+        }
+        outputIndex++;
+      }
+      return true;
+    }
 
     if (this.audioQueue.length > 0 && !this.isPlayingAudioLog) {
       this.port.postMessage({ type: "log", message: `process: Starting playback of ${this.audioQueue.length} buffers. channels=${numChannels}, bufferSize=${bufferSize}` });
@@ -108,9 +129,13 @@ class PCMProcessor extends AudioWorkletProcessor {
     }
 
     const currentlyPlaying = this.audioQueue.length > 0;
-    if (!currentlyPlaying && this.isPlayingAudioLog) {
-      this.port.postMessage({ type: "log", message: "process: Audio queue empty, playback finished." });
-      this.isPlayingAudioLog = false;
+    if (!currentlyPlaying) {
+      if (this.isPlayingAudioLog) {
+        this.port.postMessage({ type: "log", message: "process: Audio queue empty, playback finished." });
+        this.isPlayingAudioLog = false;
+      }
+      // Re-enter buffering state when queue runs dry
+      this.isBuffering = true;
     }
     this.updatePlaybackState(currentlyPlaying);
 

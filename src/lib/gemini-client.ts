@@ -139,7 +139,7 @@ export class GeminiClient {
         sum += Math.abs(int16Array[i]);
       }
       const avg = count > 0 ? (sum / count) / 32768.0 : 0;
-      return avg >= 0.0002;
+      return avg >= 0.00001; // Lower threshold to avoid ignoring quiet speech
     } catch (e) {
       console.error("Error checking silence:", e);
       return true; // Play if checking fails
@@ -233,6 +233,7 @@ export class GeminiClient {
         // D. Upon turn completion, release lock
         if (data.serverContent.turnComplete) {
           if (this.activeChannel === targetLang) {
+            this.playbackNode?.port.postMessage("turnComplete"); // Flush buffer in worklet immediately
             const pendingInput = this.pendingInputTranscripts.get(targetLang);
             if (pendingInput) {
               const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
