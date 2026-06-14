@@ -14,7 +14,8 @@ class PCMProcessor extends AudioWorkletProcessor {
         this.audioQueue = [];
         this.currentOffset = 0;
         this.updatePlaybackState(false);
-      } else if (event.data instanceof Float32Array) {
+      } else if (event.data && (event.data instanceof Float32Array || event.data.constructor?.name === "Float32Array" || event.data.byteLength !== undefined)) {
+        // Handle cross-realm Float32Arrays safely by casting/wrapping if necessary, though pushing directly is fine
         this.audioQueue.push(event.data);
         this.updatePlaybackState(true);
       }
@@ -32,10 +33,11 @@ class PCMProcessor extends AudioWorkletProcessor {
     const output = outputs[0];
     if (output.length === 0) return true;
 
-    const channel = output[0];
+    const numChannels = output.length;
+    const bufferSize = output[0].length;
     let outputIndex = 0;
 
-    while (outputIndex < channel.length && this.audioQueue.length > 0) {
+    while (outputIndex < bufferSize && this.audioQueue.length > 0) {
       const currentBuffer = this.audioQueue[0];
 
       if (!currentBuffer || currentBuffer.length === 0) {
@@ -44,13 +46,17 @@ class PCMProcessor extends AudioWorkletProcessor {
         continue;
       }
 
-      const remainingOutput = channel.length - outputIndex;
+      const remainingOutput = bufferSize - outputIndex;
       const remainingBuffer = currentBuffer.length - this.currentOffset;
       const copyLength = Math.min(remainingOutput, remainingBuffer);
 
       for (let i = 0; i < copyLength; i++) {
-        channel[outputIndex++] = currentBuffer[this.currentOffset++];
+        const sample = currentBuffer[this.currentOffset++];
+        for (let c = 0; c < numChannels; c++) {
+          output[c][outputIndex + i] = sample;
+        }
       }
+      outputIndex += copyLength;
 
       if (this.currentOffset >= currentBuffer.length) {
         this.audioQueue.shift();
@@ -58,8 +64,11 @@ class PCMProcessor extends AudioWorkletProcessor {
       }
     }
 
-    while (outputIndex < channel.length) {
-      channel[outputIndex++] = 0;
+    while (outputIndex < bufferSize) {
+      for (let c = 0; c < numChannels; c++) {
+        output[c][outputIndex] = 0;
+      }
+      outputIndex++;
     }
 
     const currentlyPlaying = this.audioQueue.length > 0;
