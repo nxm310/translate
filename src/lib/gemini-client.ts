@@ -9,8 +9,12 @@ export class GeminiClient {
   private ws1Ready = false;
   private ws2Ready = false;
 
-  // Speaking state: true when the app is playing translated audio
-  private isSpeaking = false;
+  // Speaking state tracking
+  private playbackEndTime = 0;
+
+  private get isSpeaking(): boolean {
+    return Date.now() < this.playbackEndTime;
+  }
 
   // Channel lock: only one connection can produce audio/text at a time
   private activeChannel: string | null = null;
@@ -203,7 +207,7 @@ export class GeminiClient {
 
       if (data.serverContent.interrupted) {
         this.playbackNode?.port.postMessage("interrupt");
-        this.isSpeaking = false;
+        this.playbackEndTime = 0;
         if (this.activeChannel === targetLang) {
           this.activeChannel = null;
         }
@@ -260,12 +264,6 @@ export class GeminiClient {
       this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
       this.playbackNode.connect(this.audioContext.destination);
 
-      this.playbackNode.port.onmessage = (e) => {
-        if (e.data && e.data.type === "state") {
-          this.isSpeaking = e.data.isPlaying;
-        }
-      };
-
     } catch (e) {
       console.error("Audio error", e);
       throw new Error("Veuillez autoriser l'accès au microphone dans les réglages de votre navigateur.");
@@ -274,8 +272,19 @@ export class GeminiClient {
 
   private playAudio(base64Data: string) {
     if (!this.playbackNode) return;
-    this.isSpeaking = true;
+
+    // Force AudioContext resume if suspended (critical for iOS Safari)
+    if (this.audioContext && this.audioContext.state === "suspended") {
+      this.audioContext.resume().catch(console.error);
+    }
+
     const binaryStr = atob(base64Data);
+    
+    // Update playback end time (24kHz, 16-bit mono = 2 bytes per sample)
+    const durationMs = (binaryStr.length / 2) / 24;
+    const now = Date.now();
+    this.playbackEndTime = Math.max(this.playbackEndTime, now) + durationMs;
+
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
@@ -340,7 +349,7 @@ export class GeminiClient {
     this.onStateChange("idle");
     this.ws1Ready = false;
     this.ws2Ready = false;
-    this.isSpeaking = false;
+    this.playbackEndTime = 0;
     this.activeChannel = null;
     this.lastAudioTime = 0;
     this.pendingInputTranscripts.clear();
