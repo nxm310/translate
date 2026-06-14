@@ -21,6 +21,7 @@ export default function Home() {
   
   const [apiKey, setApiKey] = useState("");
   const [needsApiKey, setNeedsApiKey] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
   
   const clientRef = useRef<GeminiClient | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -64,6 +65,7 @@ export default function Home() {
       
       client.onStateChange = (state) => setSessionState(state);
       client.onError = (err) => setErrorMsg(err);
+      client.onVolumeChange = (vol) => setMicVolume(vol);
       
       client.onTranscript = (text, isFinal, targetLang) => {
         setTranscripts((prev) => {
@@ -140,10 +142,6 @@ export default function Home() {
                 </select>
               </div>
               
-              <div style={{ display: "flex", justifyContent: "center", color: "var(--fg-ghost)", padding: "4px 0" }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-              </div>
-              
               <div style={{ width: "100%" }}>
                 <label className="label" style={{ display: "block", marginBottom: 8, textAlign: "left" }}>Langue 2</label>
                 <select className="select-field" value={lang2} onChange={(e) => setLang2(e.target.value)}>
@@ -174,10 +172,28 @@ export default function Home() {
         {(sessionState === "connecting" || sessionState === "connected") && (
           <div className="card enter">
             <div style={{ marginBottom: 24 }}>
-              <div className={`waveform ${sessionState === "connected" ? "active" : "idle"}`}>
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="waveform-bar" />
-                ))}
+              <div className="waveform active" style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, height: 40, margin: "16px 0" }}>
+                {Array.from({ length: 9 }).map((_, i) => {
+                  const factor = 1 - Math.abs(i - 4) * 0.15;
+                  const height = sessionState === "connected" 
+                    ? Math.max(4, Math.round(micVolume * factor * 0.4)) 
+                    : 6;
+                  return (
+                    <div 
+                      key={i} 
+                      className="waveform-bar"
+                      style={{ 
+                        width: 4, 
+                        height: `${height}px`, 
+                        borderRadius: 2, 
+                        background: sessionState === "connected" ? "var(--accent)" : "var(--fg-ghost)",
+                        transition: "height 0.05s ease",
+                        boxShadow: sessionState === "connected" ? "0 0 8px var(--accent-soft)" : "none",
+                        animation: "none"
+                      }} 
+                    />
+                  );
+                })}
               </div>
               <span className={`status ${sessionState === "connected" ? "status--active" : "status--waiting"}`} style={{ marginTop: 24, display: "inline-flex" }}>
                 <span className="status-dot pulse" />

@@ -17,6 +17,7 @@ export class GeminiClient {
 
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
+  public onVolumeChange: (volume: number) => void = () => {};
   public onError: (error: string) => void = () => {};
 
   constructor(
@@ -92,8 +93,8 @@ export class GeminiClient {
             echoTargetLanguage: false,
           },
         },
-        input_audio_transcription: {},
-        output_audio_transcription: {},
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
         realtimeInputConfig: {
           activityHandling: "NO_INTERRUPTION",
         },
@@ -169,6 +170,10 @@ export class GeminiClient {
         sampleRate: 24000, // Gemini outputs at 24kHz, so we run the context at 24kHz
       });
 
+      if (this.audioContext.state === "suspended") {
+        await this.audioContext.resume();
+      }
+
       // Get basePath for GitHub Pages (/translate/) or empty for local
       const basePath = window.location.pathname.startsWith('/translate') ? '/translate' : '';
 
@@ -188,7 +193,17 @@ export class GeminiClient {
 
       this.captureNode.port.onmessage = (e) => {
         if (e.data.type === "audio") {
-          this.sendAudio(e.data.data);
+          const rawData = e.data.data;
+          this.sendAudio(rawData);
+
+          // Calculate RMS volume
+          let sum = 0;
+          for (let i = 0; i < rawData.length; i++) {
+            sum += rawData[i] * rawData[i];
+          }
+          const rms = Math.sqrt(sum / rawData.length);
+          const volume = this.isSpeaking ? 0 : Math.min(100, Math.round(rms * 250));
+          this.onVolumeChange(volume);
         }
       };
 
@@ -280,6 +295,7 @@ export class GeminiClient {
     this.isSpeaking = false;
     this.pendingInputTranscripts.clear();
     this.pendingOutputTranscripts.clear();
+    this.onVolumeChange(0);
 
     if (this.ws1) {
       this.ws1.close();
