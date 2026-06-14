@@ -9,6 +9,11 @@ export class GeminiClient {
   private ws1Ready = false;
   private ws2Ready = false;
 
+  // Channel lock: only one connection can produce audio at a time
+  private activeChannel: string | null = null;
+  private lastAudioTime = 0;
+  private readonly CHANNEL_LOCK_TIMEOUT = 3000; // 3s silence before unlocking
+
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
   public onError: (error: string) => void = () => {};
@@ -105,14 +110,32 @@ export class GeminiClient {
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
-        for (const part of modelTurn.parts) {
-          if (part.text) {
-            this.onTranscript(part.text, true, targetLang);
+        // Channel lock: check if this connection is allowed to produce audio
+        const now = Date.now();
+        const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
+
+        // If no channel is active or the lock expired, allow this channel to claim it
+        if (lockExpired && this.activeChannel !== targetLang) {
+          // Switching channels: flush any queued audio from the previous channel
+          if (this.activeChannel !== null) {
+            this.playbackNode?.port.postMessage("interrupt");
           }
-          if (part.inlineData && part.inlineData.data) {
-            this.playAudio(part.inlineData.data);
+          this.activeChannel = targetLang;
+        }
+
+        // Only process audio/text from the active channel
+        if (this.activeChannel === targetLang) {
+          for (const part of modelTurn.parts) {
+            if (part.text) {
+              this.onTranscript(part.text, true, targetLang);
+            }
+            if (part.inlineData && part.inlineData.data) {
+              this.playAudio(part.inlineData.data);
+              this.lastAudioTime = Date.now();
+            }
           }
         }
+        // else: discard audio from the non-active channel
       }
       if (data.serverContent.interrupted) {
         this.playbackNode?.port.postMessage("interrupt");
@@ -225,6 +248,8 @@ export class GeminiClient {
     this.onStateChange("idle");
     this.ws1Ready = false;
     this.ws2Ready = false;
+    this.activeChannel = null;
+    this.lastAudioTime = 0;
 
     if (this.ws1) {
       this.ws1.close();
