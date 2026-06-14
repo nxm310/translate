@@ -8,16 +8,51 @@ class PCMProcessor extends AudioWorkletProcessor {
     this.audioQueue = [];
     this.currentOffset = 0;
     this.isPlaying = false;
+    this.loggedEmptyOutput = false;
+    this.isPlayingAudioLog = false;
 
     this.port.onmessage = (event) => {
       if (event.data === "interrupt") {
         this.audioQueue = [];
         this.currentOffset = 0;
         this.updatePlaybackState(false);
-      } else if (event.data && (event.data instanceof Float32Array || event.data.constructor?.name === "Float32Array" || event.data.byteLength !== undefined)) {
-        // Handle cross-realm Float32Arrays safely by casting/wrapping if necessary, though pushing directly is fine
-        this.audioQueue.push(event.data);
-        this.updatePlaybackState(true);
+        this.port.postMessage({ type: "log", message: "Playback interrupted" });
+      } else if (event.data) {
+        const isF32 = event.data instanceof Float32Array;
+        const constrName = event.data.constructor?.name;
+        const hasByteLength = event.data.byteLength !== undefined;
+        const len = event.data.length;
+
+        this.port.postMessage({ 
+          type: "log", 
+          message: `Received buffer: isFloat32Array=${isF32}, constructor=${constrName}, byteLength=${event.data.byteLength}, length=${len}` 
+        });
+
+        let samples = event.data;
+        // If we transferred the buffer, it might show up as a Float32Array or ArrayBuffer.
+        // Let's make sure it is a Float32Array.
+        if (event.data.buffer && !isF32 && constrName !== "Float32Array") {
+          try {
+            samples = new Float32Array(event.data.buffer, event.data.byteOffset || 0, len);
+            this.port.postMessage({ type: "log", message: `Successfully cast to Float32Array: length=${samples.length}` });
+          } catch (e) {
+            this.port.postMessage({ type: "log", message: `Casting to Float32Array failed: ${e.message}` });
+          }
+        } else if (event.data instanceof ArrayBuffer || constrName === "ArrayBuffer") {
+          try {
+            samples = new Float32Array(event.data);
+            this.port.postMessage({ type: "log", message: `Successfully wrapped ArrayBuffer to Float32Array: length=${samples.length}` });
+          } catch (e) {
+            this.port.postMessage({ type: "log", message: `Wrapping ArrayBuffer failed: ${e.message}` });
+          }
+        }
+
+        if (samples && samples.length > 0) {
+          this.audioQueue.push(samples);
+          this.updatePlaybackState(true);
+        } else {
+          this.port.postMessage({ type: "log", message: "Ignored empty or invalid samples buffer" });
+        }
       }
     };
   }
@@ -31,11 +66,22 @@ class PCMProcessor extends AudioWorkletProcessor {
 
   process(inputs, outputs, parameters) {
     const output = outputs[0];
-    if (output.length === 0) return true;
+    if (!output || output.length === 0) {
+      if (!this.loggedEmptyOutput) {
+        this.port.postMessage({ type: "log", message: `process: outputs[0] is empty or undefined! outputs.length=${outputs.length}` });
+        this.loggedEmptyOutput = true;
+      }
+      return true;
+    }
 
     const numChannels = output.length;
     const bufferSize = output[0].length;
     let outputIndex = 0;
+
+    if (this.audioQueue.length > 0 && !this.isPlayingAudioLog) {
+      this.port.postMessage({ type: "log", message: `process: Starting playback of ${this.audioQueue.length} buffers. channels=${numChannels}, bufferSize=${bufferSize}` });
+      this.isPlayingAudioLog = true;
+    }
 
     while (outputIndex < bufferSize && this.audioQueue.length > 0) {
       const currentBuffer = this.audioQueue[0];
@@ -72,6 +118,10 @@ class PCMProcessor extends AudioWorkletProcessor {
     }
 
     const currentlyPlaying = this.audioQueue.length > 0;
+    if (!currentlyPlaying && this.isPlayingAudioLog) {
+      this.port.postMessage({ type: "log", message: "process: Audio queue empty, playback finished." });
+      this.isPlayingAudioLog = false;
+    }
     this.updatePlaybackState(currentlyPlaying);
 
     return true;

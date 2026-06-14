@@ -281,6 +281,13 @@ export class GeminiClient {
       source.connect(this.captureNode);
 
       this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
+      this.playbackNode.port.onmessage = (e) => {
+        if (e.data && e.data.type === "log") {
+          console.log(`[PlaybackWorklet] ${e.data.message}`);
+        } else if (e.data && e.data.type === "state") {
+          console.log(`[PlaybackWorklet] state isPlaying: ${e.data.isPlaying}`);
+        }
+      };
       this.playbackNode.connect(this.audioContext.destination);
 
     } catch (e) {
@@ -321,9 +328,24 @@ export class GeminiClient {
     // Resample from 24000Hz to native sample rate
     const nativeRate = this.audioContext?.sampleRate || 48000;
     const resampled = this.resample(float32Array, 24000, nativeRate);
-    console.log(`playAudio: resampled from 24kHz to nativeRate=${nativeRate}, samples=${resampled.length}`);
+    
+    // Log sample statistics to check for silence or NaN values
+    let min = 0, max = 0, sum = 0, nanCount = 0;
+    for (let i = 0; i < resampled.length; i++) {
+      const val = resampled[i];
+      if (isNaN(val)) {
+        nanCount++;
+      } else {
+        if (val < min) min = val;
+        if (val > max) max = val;
+        sum += Math.abs(val);
+      }
+    }
+    const avg = resampled.length > 0 ? sum / resampled.length : 0;
+    console.log(`playAudio stats: min=${min.toFixed(4)}, max=${max.toFixed(4)}, avg=${avg.toFixed(4)}, nans=${nanCount}, sampleRate=${nativeRate}`);
 
-    this.playbackNode.port.postMessage(resampled);
+    // Send audio buffer to worklet (transferring buffer to avoid copy)
+    this.playbackNode.port.postMessage(resampled, [resampled.buffer]);
   }
 
   private sendAudio(float32Data: Float32Array) {
