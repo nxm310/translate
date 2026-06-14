@@ -218,9 +218,7 @@ export class GeminiClient {
 
   private async startAudio() {
     try {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 24000, // Gemini outputs at 24kHz, so we run the context at 24kHz
-      });
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
       if (this.audioContext.state === "suspended") {
         await this.audioContext.resume();
@@ -289,13 +287,18 @@ export class GeminiClient {
     for (let i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
-    // PCM 16-bit to Float32
+    // PCM 16-bit to Float32 at 24000Hz
     const int16Array = new Int16Array(bytes.buffer);
     const float32Array = new Float32Array(int16Array.length);
     for (let i = 0; i < int16Array.length; i++) {
       float32Array[i] = int16Array[i] / 32768.0;
     }
-    this.playbackNode.port.postMessage(float32Array);
+
+    // Resample from 24000Hz to native sample rate
+    const nativeRate = this.audioContext?.sampleRate || 48000;
+    const resampled = this.resample(float32Array, 24000, nativeRate);
+
+    this.playbackNode.port.postMessage(resampled);
   }
 
   private sendAudio(float32Data: Float32Array) {
@@ -305,19 +308,14 @@ export class GeminiClient {
     const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
     if (!ws1Open && !ws2Open) return;
 
-    // Downsample from 24000Hz to 16000Hz (keep 2 out of 3 samples)
-    const downsampledLength = Math.floor(float32Data.length * 2 / 3);
-    const downsampled = new Float32Array(downsampledLength);
-    let outIdx = 0;
-    for (let i = 0; i < float32Data.length; i += 3) {
-      if (outIdx < downsampledLength) downsampled[outIdx++] = float32Data[i];
-      if (i + 1 < float32Data.length && outIdx < downsampledLength) downsampled[outIdx++] = float32Data[i + 1];
-    }
+    const nativeRate = this.audioContext?.sampleRate || 48000;
+    // Resample from native rate to 16000Hz for Gemini
+    const resampled = this.resample(float32Data, nativeRate, 16000);
 
     // Float32 to PCM 16-bit
-    const int16Array = new Int16Array(downsampled.length);
-    for (let i = 0; i < downsampled.length; i++) {
-      let val = downsampled[i] * 32768.0;
+    const int16Array = new Int16Array(resampled.length);
+    for (let i = 0; i < resampled.length; i++) {
+      let val = resampled[i] * 32768.0;
       val = Math.max(-32768, Math.min(32767, val));
       int16Array[i] = val;
     }
@@ -343,6 +341,21 @@ export class GeminiClient {
     // Send same audio to both connections
     if (ws1Open) this.ws1!.send(audioMessage);
     if (ws2Open) this.ws2!.send(audioMessage);
+  }
+
+  private resample(data: Float32Array, fromRate: number, toRate: number): Float32Array {
+    if (fromRate === toRate) return data;
+    const ratio = fromRate / toRate;
+    const newLength = Math.round(data.length / ratio);
+    const result = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const pos = i * ratio;
+      const idx = Math.floor(pos);
+      const fraction = pos - idx;
+      const nextIdx = idx + 1 < data.length ? idx + 1 : idx;
+      result[i] = data[idx] * (1 - fraction) + data[nextIdx] * fraction;
+    }
+    return result;
   }
 
   disconnect() {
