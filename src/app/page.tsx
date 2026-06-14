@@ -88,9 +88,9 @@ export default function Home() {
     }
   };
 
-  const stopConversation = () => {
+  const stopConversation = async () => {
     if (clientRef.current) {
-      clientRef.current.disconnect();
+      await clientRef.current.disconnect();
       clientRef.current = null;
     }
     setSessionState("idle");

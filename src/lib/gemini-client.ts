@@ -20,8 +20,6 @@ export class GeminiClient {
 
   // Channel lock: only one connection can produce audio/text at a time
   private activeChannel: string | null = null;
-  private lastAudioTime = 0;
-  private readonly CHANNEL_LOCK_TIMEOUT = 2000; // 2s silence before unlocking
 
   private pendingInputTranscripts = new Map<string, string>();
 
@@ -41,7 +39,6 @@ export class GeminiClient {
     this.ws1Ready = false;
     this.ws2Ready = false;
     this.activeChannel = null;
-    this.lastAudioTime = 0;
 
     try {
       // 1. Initialize Audio (must be done immediately on user click for iOS Safari)
@@ -126,6 +123,29 @@ export class GeminiClient {
     ws?.send(JSON.stringify(setupMessage));
   }
 
+  private isNonSilent(base64Data: string): boolean {
+    try {
+      const binaryStr = atob(base64Data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const alignedLength = Math.floor(bytes.byteLength / 2) * 2;
+      const int16Array = new Int16Array(bytes.buffer, 0, alignedLength / 2);
+      
+      let sum = 0;
+      const count = int16Array.length;
+      for (let i = 0; i < count; i++) {
+        sum += Math.abs(int16Array[i]);
+      }
+      const avg = count > 0 ? (sum / count) / 32768.0 : 0;
+      return avg >= 0.0002;
+    } catch (e) {
+      console.error("Error checking silence:", e);
+      return true; // Play if checking fails
+    }
+  }
+
   private handleMessage(data: any, targetLang: string) {
     try {
       if (data.setupComplete) {
@@ -137,58 +157,61 @@ export class GeminiClient {
           console.log("Dual WebSocket connection established and ready");
         }
       } else if (data.serverContent) {
-        console.log("Received serverContent for", targetLang, Object.keys(data.serverContent));
-        const now = Date.now();
-        const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
-
-        // We only allow claiming the lock when the model starts outputting translation (text or audio)
-        const hasOutput = !!(data.serverContent.modelTurn || data.serverContent.outputTranscription || data.serverContent.output_transcription);
-
-        if (hasOutput && lockExpired && this.activeChannel !== targetLang) {
-          // Switching channels: interrupt any playing audio from the other channel
-          if (this.activeChannel !== null) {
-            this.playbackNode?.port.postMessage("interrupt");
+        // A. Check for audio presence and filter out silent turns immediately
+        let hasAudio = false;
+        let hasNonSilentAudio = false;
+        const modelTurn = data.serverContent.modelTurn;
+        if (modelTurn) {
+          for (const part of modelTurn.parts) {
+            if (part.inlineData && part.inlineData.data) {
+              hasAudio = true;
+              if (this.isNonSilent(part.inlineData.data)) {
+                hasNonSilentAudio = true;
+              }
+            }
           }
-          this.activeChannel = targetLang;
         }
 
-        // 1. Accumulate input transcription (what the user said in the source language)
-        const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
-        if (inputTx && inputTx.text) {
-          const current = this.pendingInputTranscripts.get(targetLang) || "";
-          const newText = current + inputTx.text;
-          this.pendingInputTranscripts.set(targetLang, newText);
+        if (hasAudio && !hasNonSilentAudio) {
+          console.log(`handleMessage: ignored silent modelTurn from ${targetLang}`);
+          return;
+        }
 
-          // If this channel is already active, dispatch the input transcript immediately
-          if (this.activeChannel === targetLang) {
+        // B. Claim active channel lock if currently idle
+        const hasOutput = !!(modelTurn || data.serverContent.outputTranscription || data.serverContent.output_transcription);
+        if (hasOutput && this.activeChannel === null) {
+          this.activeChannel = targetLang;
+          console.log(`Locked activeChannel to: ${targetLang}`);
+        }
+
+        // C. Process translation content only for the active channel
+        if (this.activeChannel === targetLang) {
+          // 1. Accumulate input transcription (what the user said in the source language)
+          const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
+          if (inputTx && inputTx.text) {
+            const current = this.pendingInputTranscripts.get(targetLang) || "";
+            const newText = current + inputTx.text;
+            this.pendingInputTranscripts.set(targetLang, newText);
+
             const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
             this.onTranscript(newText, true, sourceLang);
             this.pendingInputTranscripts.delete(targetLang);
           }
-        }
 
-        // 2. Accumulate and dispatch output transcription (the translation text)
-        const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
-        if (outputTx && outputTx.text) {
-          if (this.activeChannel === targetLang) {
-            // Dispatch any pending input transcript first
+          // 2. Accumulate and dispatch output transcription (the translation text)
+          const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
+          if (outputTx && outputTx.text) {
             const pendingInput = this.pendingInputTranscripts.get(targetLang);
             if (pendingInput) {
               const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
               this.onTranscript(pendingInput, true, sourceLang);
               this.pendingInputTranscripts.delete(targetLang);
             }
-
-            // Output the translation transcript
             this.onTranscript(outputTx.text, true, targetLang);
           }
-        }
 
-        // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
-        const modelTurn = data.serverContent.modelTurn;
-        if (modelTurn) {
-          if (this.activeChannel === targetLang) {
-            // Dispatch any pending input transcript first
+          // 3. Accumulate modelTurn parts (audio and text)
+          if (modelTurn) {
             const pendingInput = this.pendingInputTranscripts.get(targetLang);
             if (pendingInput) {
               const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
@@ -202,13 +225,12 @@ export class GeminiClient {
               }
               if (part.inlineData && part.inlineData.data) {
                 this.playAudio(part.inlineData.data);
-                this.lastAudioTime = Date.now();
               }
             }
           }
         }
 
-        // 4. Upon turn completion, clear state and release lock
+        // D. Upon turn completion, release lock
         if (data.serverContent.turnComplete) {
           if (this.activeChannel === targetLang) {
             const pendingInput = this.pendingInputTranscripts.get(targetLang);
@@ -217,6 +239,7 @@ export class GeminiClient {
               this.onTranscript(pendingInput, true, sourceLang);
             }
             this.activeChannel = null;
+            console.log(`Unlocked activeChannel on turnComplete`);
           }
           this.pendingInputTranscripts.delete(targetLang);
         }
@@ -226,6 +249,7 @@ export class GeminiClient {
           this.playbackEndTime = 0;
           if (this.activeChannel === targetLang) {
             this.activeChannel = null;
+            console.log(`Unlocked activeChannel on interruption`);
           }
           this.pendingInputTranscripts.delete(targetLang);
         }
@@ -295,7 +319,9 @@ export class GeminiClient {
 
       micSource.connect(this.captureNode);
 
-      this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
+      this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor", {
+        outputChannelCount: [2] // Configure to 2-channel stereo for high device compatibility
+      });
       this.playbackNode.port.onmessage = (e) => {
         if (e.data && e.data.type === "log") {
           console.log(`[PlaybackWorklet] ${e.data.message}`);
@@ -364,6 +390,12 @@ export class GeminiClient {
       return; // Skip sending audio while playing back translation
     }
 
+    // Safety release: when the user starts speaking, release any lingering active channel lock
+    if (this.activeChannel !== null) {
+      console.log("User started speaking: releasing activeChannel lock");
+      this.activeChannel = null;
+    }
+
     const ws1Open = this.ws1 && this.ws1.readyState === WebSocket.OPEN;
     const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
     if (!ws1Open && !ws2Open) {
@@ -427,13 +459,12 @@ export class GeminiClient {
     return result;
   }
 
-  disconnect() {
+  async disconnect() {
     this.onStateChange("idle");
     this.ws1Ready = false;
     this.ws2Ready = false;
     this.playbackEndTime = 0;
     this.activeChannel = null;
-    this.lastAudioTime = 0;
     this.pendingInputTranscripts.clear();
     this.onVolumeChange(0);
 
@@ -458,7 +489,11 @@ export class GeminiClient {
       this.playbackNode = null;
     }
     if (this.audioContext) {
-      this.audioContext.close();
+      try {
+        await this.audioContext.close();
+      } catch (e) {
+        console.error("Error closing AudioContext:", e);
+      }
       this.audioContext = null;
     }
   }

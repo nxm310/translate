@@ -20,13 +20,7 @@ class PCMProcessor extends AudioWorkletProcessor {
       } else if (event.data) {
         const isF32 = event.data instanceof Float32Array;
         const constrName = event.data.constructor?.name;
-        const hasByteLength = event.data.byteLength !== undefined;
         const len = event.data.length;
-
-        this.port.postMessage({ 
-          type: "log", 
-          message: `Received buffer: isFloat32Array=${isF32}, constructor=${constrName}, byteLength=${event.data.byteLength}, length=${len}` 
-        });
 
         let samples = event.data;
         // If we transferred the buffer, it might show up as a Float32Array or ArrayBuffer.
@@ -34,14 +28,12 @@ class PCMProcessor extends AudioWorkletProcessor {
         if (event.data.buffer && !isF32 && constrName !== "Float32Array") {
           try {
             samples = new Float32Array(event.data.buffer, event.data.byteOffset || 0, len);
-            this.port.postMessage({ type: "log", message: `Successfully cast to Float32Array: length=${samples.length}` });
           } catch (e) {
             this.port.postMessage({ type: "log", message: `Casting to Float32Array failed: ${e.message}` });
           }
         } else if (event.data instanceof ArrayBuffer || constrName === "ArrayBuffer") {
           try {
             samples = new Float32Array(event.data);
-            this.port.postMessage({ type: "log", message: `Successfully wrapped ArrayBuffer to Float32Array: length=${samples.length}` });
           } catch (e) {
             this.port.postMessage({ type: "log", message: `Wrapping ArrayBuffer failed: ${e.message}` });
           }
@@ -50,8 +42,6 @@ class PCMProcessor extends AudioWorkletProcessor {
         if (samples && samples.length > 0) {
           this.audioQueue.push(samples);
           this.updatePlaybackState(true);
-        } else {
-          this.port.postMessage({ type: "log", message: "Ignored empty or invalid samples buffer" });
         }
       }
     };
