@@ -12,6 +12,9 @@ export class GeminiClient {
   // Speaking state: true when the app is playing translated audio
   private isSpeaking = false;
 
+  private pendingInputTranscripts = new Map<string, string>();
+  private pendingOutputTranscripts = new Map<string, string>();
+
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
   public onError: (error: string) => void = () => {};
@@ -89,6 +92,8 @@ export class GeminiClient {
             echoTargetLanguage: false,
           },
         },
+        input_audio_transcription: {},
+        output_audio_transcription: {},
         realtimeInputConfig: {
           activityHandling: "NO_INTERRUPTION",
         },
@@ -106,20 +111,54 @@ export class GeminiClient {
         this.onStateChange("connected");
       }
     } else if (data.serverContent) {
+      // 1. Accumulate input transcription (what the user said in the source language)
+      if (data.serverContent.inputTranscription && data.serverContent.inputTranscription.text) {
+        const current = this.pendingInputTranscripts.get(targetLang) || "";
+        this.pendingInputTranscripts.set(targetLang, current + data.serverContent.inputTranscription.text);
+      }
+
+      // 2. Accumulate output transcription (the translation text)
+      if (data.serverContent.outputTranscription && data.serverContent.outputTranscription.text) {
+        const current = this.pendingOutputTranscripts.get(targetLang) || "";
+        this.pendingOutputTranscripts.set(targetLang, current + data.serverContent.outputTranscription.text);
+      }
+
+      // 3. Accumulate modelTurn parts (audio and fallback text translation)
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
         for (const part of modelTurn.parts) {
           if (part.text) {
-            this.onTranscript(part.text, true, targetLang);
+            const current = this.pendingOutputTranscripts.get(targetLang) || "";
+            this.pendingOutputTranscripts.set(targetLang, current + part.text);
           }
           if (part.inlineData && part.inlineData.data) {
             this.playAudio(part.inlineData.data);
           }
         }
       }
+
+      // 4. Upon turn completion, dispatch both transcripts if this was the active channel
+      if (data.serverContent.turnComplete) {
+        const input = this.pendingInputTranscripts.get(targetLang);
+        const output = this.pendingOutputTranscripts.get(targetLang);
+
+        if (output) {
+          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+          if (input) {
+            this.onTranscript(input, true, sourceLang);
+          }
+          this.onTranscript(output, true, targetLang);
+        }
+
+        this.pendingInputTranscripts.delete(targetLang);
+        this.pendingOutputTranscripts.delete(targetLang);
+      }
+
       if (data.serverContent.interrupted) {
         this.playbackNode?.port.postMessage("interrupt");
         this.isSpeaking = false;
+        this.pendingInputTranscripts.delete(targetLang);
+        this.pendingOutputTranscripts.delete(targetLang);
       }
     }
   }
@@ -239,6 +278,8 @@ export class GeminiClient {
     this.ws1Ready = false;
     this.ws2Ready = false;
     this.isSpeaking = false;
+    this.pendingInputTranscripts.clear();
+    this.pendingOutputTranscripts.clear();
 
     if (this.ws1) {
       this.ws1.close();
