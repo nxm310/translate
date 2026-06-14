@@ -52,8 +52,13 @@ export class GeminiClient {
       this.ws1 = new WebSocket(url);
       this.ws1.onopen = () => this.setupSession(this.ws1, this.lang1, "Aoede");
       this.ws1.onmessage = async (event) => {
-        const text = event.data instanceof Blob ? await event.data.text() : event.data;
-        this.handleMessage(JSON.parse(text), this.lang1);
+        try {
+          const text = event.data instanceof Blob ? await event.data.text() : event.data;
+          this.handleMessage(JSON.parse(text), this.lang1);
+        } catch (err: any) {
+          console.error("WS1 Message Error:", err);
+          this.onError(`Erreur message (WS1): ${err.message || err}`);
+        }
       };
       this.ws1.onclose = (event) => {
         if (event.code !== 1000 && event.code !== 1005) {
@@ -67,8 +72,13 @@ export class GeminiClient {
       this.ws2 = new WebSocket(url);
       this.ws2.onopen = () => this.setupSession(this.ws2, this.lang2, "Puck");
       this.ws2.onmessage = async (event) => {
-        const text = event.data instanceof Blob ? await event.data.text() : event.data;
-        this.handleMessage(JSON.parse(text), this.lang2);
+        try {
+          const text = event.data instanceof Blob ? await event.data.text() : event.data;
+          this.handleMessage(JSON.parse(text), this.lang2);
+        } catch (err: any) {
+          console.error("WS2 Message Error:", err);
+          this.onError(`Erreur message (WS2): ${err.message || err}`);
+        }
       };
       this.ws2.onclose = (event) => {
         if (event.code !== 1000 && event.code !== 1005) {
@@ -114,105 +124,110 @@ export class GeminiClient {
   }
 
   private handleMessage(data: any, targetLang: string) {
-    if (data.setupComplete) {
-      if (targetLang === this.lang1) this.ws1Ready = true;
-      if (targetLang === this.lang2) this.ws2Ready = true;
+    try {
+      if (data.setupComplete) {
+        if (targetLang === this.lang1) this.ws1Ready = true;
+        if (targetLang === this.lang2) this.ws2Ready = true;
 
-      if (this.ws1Ready && this.ws2Ready) {
-        this.onStateChange("connected");
-      }
-    } else if (data.serverContent) {
-      const now = Date.now();
-      const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
-
-      // We only allow claiming the lock when the model starts outputting translation (text or audio)
-      const hasOutput = !!(data.serverContent.modelTurn || data.serverContent.outputTranscription || data.serverContent.output_transcription);
-
-      if (hasOutput && lockExpired && this.activeChannel !== targetLang) {
-        // Switching channels: interrupt any playing audio from the other channel
-        if (this.activeChannel !== null) {
-          this.playbackNode?.port.postMessage("interrupt");
+        if (this.ws1Ready && this.ws2Ready) {
+          this.onStateChange("connected");
         }
-        this.activeChannel = targetLang;
-      }
+      } else if (data.serverContent) {
+        const now = Date.now();
+        const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
 
-      // 1. Accumulate input transcription (what the user said in the source language)
-      const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
-      if (inputTx && inputTx.text) {
-        const current = this.pendingInputTranscripts.get(targetLang) || "";
-        const newText = current + inputTx.text;
-        this.pendingInputTranscripts.set(targetLang, newText);
+        // We only allow claiming the lock when the model starts outputting translation (text or audio)
+        const hasOutput = !!(data.serverContent.modelTurn || data.serverContent.outputTranscription || data.serverContent.output_transcription);
 
-        // If this channel is already active, dispatch the input transcript immediately
-        if (this.activeChannel === targetLang) {
-          const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-          this.onTranscript(newText, true, sourceLang);
+        if (hasOutput && lockExpired && this.activeChannel !== targetLang) {
+          // Switching channels: interrupt any playing audio from the other channel
+          if (this.activeChannel !== null) {
+            this.playbackNode?.port.postMessage("interrupt");
+          }
+          this.activeChannel = targetLang;
+        }
+
+        // 1. Accumulate input transcription (what the user said in the source language)
+        const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
+        if (inputTx && inputTx.text) {
+          const current = this.pendingInputTranscripts.get(targetLang) || "";
+          const newText = current + inputTx.text;
+          this.pendingInputTranscripts.set(targetLang, newText);
+
+          // If this channel is already active, dispatch the input transcript immediately
+          if (this.activeChannel === targetLang) {
+            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+            this.onTranscript(newText, true, sourceLang);
+            this.pendingInputTranscripts.delete(targetLang);
+          }
+        }
+
+        // 2. Accumulate and dispatch output transcription (the translation text)
+        const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
+        if (outputTx && outputTx.text) {
+          if (this.activeChannel === targetLang) {
+            // Dispatch any pending input transcript first
+            const pendingInput = this.pendingInputTranscripts.get(targetLang);
+            if (pendingInput) {
+              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+              this.onTranscript(pendingInput, true, sourceLang);
+              this.pendingInputTranscripts.delete(targetLang);
+            }
+
+            // Output the translation transcript
+            this.onTranscript(outputTx.text, true, targetLang);
+          }
+        }
+
+        // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
+        const modelTurn = data.serverContent.modelTurn;
+        if (modelTurn) {
+          if (this.activeChannel === targetLang) {
+            // Dispatch any pending input transcript first
+            const pendingInput = this.pendingInputTranscripts.get(targetLang);
+            if (pendingInput) {
+              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+              this.onTranscript(pendingInput, true, sourceLang);
+              this.pendingInputTranscripts.delete(targetLang);
+            }
+
+            for (const part of modelTurn.parts) {
+              if (part.text) {
+                this.onTranscript(part.text, true, targetLang);
+              }
+              if (part.inlineData && part.inlineData.data) {
+                this.playAudio(part.inlineData.data);
+                this.lastAudioTime = Date.now();
+              }
+            }
+          }
+        }
+
+        // 4. Upon turn completion, clear state and release lock
+        if (data.serverContent.turnComplete) {
+          if (this.activeChannel === targetLang) {
+            const pendingInput = this.pendingInputTranscripts.get(targetLang);
+            if (pendingInput) {
+              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
+              this.onTranscript(pendingInput, true, sourceLang);
+            }
+            this.activeChannel = null;
+          }
+          this.pendingInputTranscripts.delete(targetLang);
+        }
+
+        if (data.serverContent.interrupted) {
+          this.playbackNode?.port.postMessage("interrupt");
+          this.playbackEndTime = 0;
+          if (this.activeChannel === targetLang) {
+            this.activeChannel = null;
+          }
           this.pendingInputTranscripts.delete(targetLang);
         }
       }
-
-      // 2. Accumulate and dispatch output transcription (the translation text)
-      const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
-      if (outputTx && outputTx.text) {
-        if (this.activeChannel === targetLang) {
-          // Dispatch any pending input transcript first
-          const pendingInput = this.pendingInputTranscripts.get(targetLang);
-          if (pendingInput) {
-            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-            this.onTranscript(pendingInput, true, sourceLang);
-            this.pendingInputTranscripts.delete(targetLang);
-          }
-
-          // Output the translation transcript
-          this.onTranscript(outputTx.text, true, targetLang);
-        }
-      }
-
-      // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
-      const modelTurn = data.serverContent.modelTurn;
-      if (modelTurn) {
-        if (this.activeChannel === targetLang) {
-          // Dispatch any pending input transcript first
-          const pendingInput = this.pendingInputTranscripts.get(targetLang);
-          if (pendingInput) {
-            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-            this.onTranscript(pendingInput, true, sourceLang);
-            this.pendingInputTranscripts.delete(targetLang);
-          }
-
-          for (const part of modelTurn.parts) {
-            if (part.text) {
-              this.onTranscript(part.text, true, targetLang);
-            }
-            if (part.inlineData && part.inlineData.data) {
-              this.playAudio(part.inlineData.data);
-              this.lastAudioTime = Date.now();
-            }
-          }
-        }
-      }
-
-      // 4. Upon turn completion, clear state and release lock
-      if (data.serverContent.turnComplete) {
-        if (this.activeChannel === targetLang) {
-          const pendingInput = this.pendingInputTranscripts.get(targetLang);
-          if (pendingInput) {
-            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-            this.onTranscript(pendingInput, true, sourceLang);
-          }
-          this.activeChannel = null;
-        }
-        this.pendingInputTranscripts.delete(targetLang);
-      }
-
-      if (data.serverContent.interrupted) {
-        this.playbackNode?.port.postMessage("interrupt");
-        this.playbackEndTime = 0;
-        if (this.activeChannel === targetLang) {
-          this.activeChannel = null;
-        }
-        this.pendingInputTranscripts.delete(targetLang);
-      }
+    } catch (err: any) {
+      console.error("handleMessage Error:", err);
+      this.onError(`Erreur message: ${err.message || err}`);
     }
   }
 
@@ -242,18 +257,23 @@ export class GeminiClient {
       this.captureNode = new AudioWorkletNode(this.audioContext, "audio-capture-processor");
 
       this.captureNode.port.onmessage = (e) => {
-        if (e.data.type === "audio") {
-          const rawData = e.data.data;
-          this.sendAudio(rawData);
+        try {
+          if (e.data.type === "audio") {
+            const rawData = e.data.data;
+            this.sendAudio(rawData);
 
-          // Calculate RMS volume
-          let sum = 0;
-          for (let i = 0; i < rawData.length; i++) {
-            sum += rawData[i] * rawData[i];
+            // Calculate RMS volume
+            let sum = 0;
+            for (let i = 0; i < rawData.length; i++) {
+              sum += rawData[i] * rawData[i];
+            }
+            const rms = Math.sqrt(sum / rawData.length);
+            const volume = this.isSpeaking ? 0 : Math.min(100, Math.round(rms * 250));
+            this.onVolumeChange(volume);
           }
-          const rms = Math.sqrt(sum / rawData.length);
-          const volume = this.isSpeaking ? 0 : Math.min(100, Math.round(rms * 250));
-          this.onVolumeChange(volume);
+        } catch (err: any) {
+          console.error("Capture onmessage Error:", err);
+          this.onError(`Erreur capture: ${err.message || err}`);
         }
       };
 
@@ -287,8 +307,9 @@ export class GeminiClient {
     for (let i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
-    // PCM 16-bit to Float32 at 24000Hz
-    const int16Array = new Int16Array(bytes.buffer);
+    // Ensure even byte length to prevent RangeError during Int16Array construction
+    const alignedLength = Math.floor(bytes.byteLength / 2) * 2;
+    const int16Array = new Int16Array(bytes.buffer, 0, alignedLength / 2);
     const float32Array = new Float32Array(int16Array.length);
     for (let i = 0; i < int16Array.length; i++) {
       float32Array[i] = int16Array[i] / 32768.0;
@@ -344,13 +365,23 @@ export class GeminiClient {
   }
 
   private resample(data: Float32Array, fromRate: number, toRate: number): Float32Array {
-    if (fromRate === toRate) return data;
+    if (fromRate === toRate || !data || data.length === 0) return data;
+    if (fromRate <= 0 || toRate <= 0 || isNaN(fromRate) || isNaN(toRate)) return new Float32Array(0);
+    
     const ratio = fromRate / toRate;
-    const newLength = Math.round(data.length / ratio);
+    let newLength = Math.round(data.length / ratio);
+    if (isNaN(newLength) || newLength < 0 || newLength === Infinity) {
+      newLength = 0;
+    }
+    
     const result = new Float32Array(newLength);
     for (let i = 0; i < newLength; i++) {
       const pos = i * ratio;
       const idx = Math.floor(pos);
+      if (idx >= data.length || idx < 0) {
+        result[i] = data[data.length - 1] || 0;
+        continue;
+      }
       const fraction = pos - idx;
       const nextIdx = idx + 1 < data.length ? idx + 1 : idx;
       result[i] = data[idx] * (1 - fraction) + data[nextIdx] * fraction;
