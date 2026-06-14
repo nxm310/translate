@@ -1,27 +1,19 @@
+import { SUPPORTED_LANGUAGES, detectLanguage } from "./languages";
+
 export class GeminiClient {
-  private ws1: WebSocket | null = null;
-  private ws2: WebSocket | null = null;
+  private ws: WebSocket | null = null;
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private captureNode: AudioWorkletNode | null = null;
   private playbackNode: AudioWorkletNode | null = null;
 
-  private ws1Ready = false;
-  private ws2Ready = false;
-
   // Speaking state tracking
   private playbackEndTime = 0;
+  private lastDetectedLang = "";
 
   private get isSpeaking(): boolean {
     return Date.now() < this.playbackEndTime;
   }
-
-  // Channel lock: only one connection can produce audio/text at a time
-  private activeChannel: string | null = null;
-  private lastAudioTime = 0;
-  private readonly CHANNEL_LOCK_TIMEOUT = 2000; // 2s silence before unlocking
-
-  private pendingInputTranscripts = new Map<string, string>();
 
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
@@ -36,57 +28,37 @@ export class GeminiClient {
 
   async connect() {
     this.onStateChange("connecting");
-    this.ws1Ready = false;
-    this.ws2Ready = false;
-    this.activeChannel = null;
-    this.lastAudioTime = 0;
+    this.lastDetectedLang = "";
 
     try {
       // 1. Initialize Audio (must be done immediately on user click for iOS Safari)
       await this.startAudio();
 
-      // 2. Connect WebSockets — one per translation direction
+      // 2. Connect to Gemini Live API WebSocket (v1alpha endpoint)
       const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
-
-      // WS1: translates INTO lang1 (e.g. when someone speaks lang2, output is lang1)
-      this.ws1 = new WebSocket(url);
-      this.ws1.onopen = () => this.setupSession(this.ws1, this.lang1, "Aoede");
-      this.ws1.onmessage = async (event) => {
+      
+      this.ws = new WebSocket(url);
+      this.ws.onopen = () => {
+        this.setupSession();
+      };
+      this.ws.onmessage = async (event) => {
         try {
           const text = event.data instanceof Blob ? await event.data.text() : event.data;
-          this.handleMessage(JSON.parse(text), this.lang1);
+          this.handleMessage(JSON.parse(text));
         } catch (err: any) {
-          console.error("WS1 Message Error:", err);
-          this.onError(`Erreur message (WS1): ${err.message || err}`);
+          console.error("WebSocket Message Error:", err);
+          this.onError(`Erreur message: ${err.message || err}`);
         }
       };
-      this.ws1.onclose = (event) => {
+      this.ws.onclose = (event) => {
         if (event.code !== 1000 && event.code !== 1005) {
           this.onError(`Erreur de connexion (${event.code}): ${event.reason || "Connexion rejetée par Gemini"}`);
         }
         this.disconnect();
       };
-      this.ws1.onerror = () => this.onError("Erreur réseau WebSocket");
-
-      // WS2: translates INTO lang2 (e.g. when someone speaks lang1, output is lang2)
-      this.ws2 = new WebSocket(url);
-      this.ws2.onopen = () => this.setupSession(this.ws2, this.lang2, "Puck");
-      this.ws2.onmessage = async (event) => {
-        try {
-          const text = event.data instanceof Blob ? await event.data.text() : event.data;
-          this.handleMessage(JSON.parse(text), this.lang2);
-        } catch (err: any) {
-          console.error("WS2 Message Error:", err);
-          this.onError(`Erreur message (WS2): ${err.message || err}`);
-        }
+      this.ws.onerror = () => {
+        this.onError("Erreur réseau WebSocket");
       };
-      this.ws2.onclose = (event) => {
-        if (event.code !== 1000 && event.code !== 1005) {
-          this.onError(`Erreur de connexion (${event.code}): ${event.reason || "Connexion rejetée par Gemini"}`);
-        }
-        this.disconnect();
-      };
-      this.ws2.onerror = () => this.onError("Erreur réseau WebSocket");
 
     } catch (e) {
       console.error(e);
@@ -95,157 +67,134 @@ export class GeminiClient {
     }
   }
 
-  private setupSession(ws: WebSocket | null, targetLang: string, voiceName: string) {
+  private setupSession() {
+    const lang1Name = SUPPORTED_LANGUAGES.find(l => l.code === this.lang1)?.name || this.lang1;
+    const lang2Name = SUPPORTED_LANGUAGES.find(l => l.code === this.lang2)?.name || this.lang2;
+    
+    // Configure system instruction to translate between selected languages dynamically
+    const systemInstructionText = `You are a real-time voice-to-voice translator between ${lang1Name} (${this.lang1}) and ${lang2Name} (${this.lang2}).
+Detect the spoken language automatically. If you hear ${lang1Name}, translate it to ${lang2Name}. If you hear ${lang2Name}, translate it to ${lang1Name}.
+Respond ONLY with the direct translation of what was said. Do not add any conversational remarks, commentary, explanations, or filler. Just translate directly.`;
+
     const setupMessage = {
       setup: {
-        model: "models/gemini-3.5-live-translate-preview",
+        model: "models/gemini-2.0-flash-exp",
         generationConfig: {
           responseModalities: ["AUDIO"],
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: voiceName,
+                voiceName: "Aoede", // Aoede is a clear voice
               },
             },
           },
-          translationConfig: {
-            targetLanguageCode: targetLang,
-            echoTargetLanguage: false,
-          },
+        },
+        systemInstruction: {
+          parts: [
+            {
+              text: systemInstructionText,
+            },
+          ],
         },
         input_audio_transcription: {},
         output_audio_transcription: {},
-        realtimeInputConfig: {
-          activityHandling: "NO_INTERRUPTION",
-        },
       },
     };
-    ws?.send(JSON.stringify(setupMessage));
+
+    console.log("Sending setup config:", setupMessage);
+    this.ws?.send(JSON.stringify(setupMessage));
   }
 
-  private handleMessage(data: any, targetLang: string) {
+  private handleMessage(data: any) {
     try {
       if (data.setupComplete) {
-        if (targetLang === this.lang1) this.ws1Ready = true;
-        if (targetLang === this.lang2) this.ws2Ready = true;
-
-        if (this.ws1Ready && this.ws2Ready) {
-          this.onStateChange("connected");
-        }
+        this.onStateChange("connected");
+        console.log("Session setup complete");
       } else if (data.serverContent) {
-        console.log("handleMessage: received serverContent from", targetLang, Object.keys(data.serverContent));
-        const now = Date.now();
-        const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
+        const serverContent = data.serverContent;
+        console.log("Received serverContent:", Object.keys(serverContent));
 
-        // We only allow claiming the lock when the model starts outputting translation (text or audio)
-        const hasOutput = !!(data.serverContent.modelTurn || data.serverContent.outputTranscription || data.serverContent.output_transcription);
-
-        if (hasOutput && lockExpired && this.activeChannel !== targetLang) {
-          // Switching channels: interrupt any playing audio from the other channel
-          if (this.activeChannel !== null) {
-            this.playbackNode?.port.postMessage("interrupt");
-          }
-          this.activeChannel = targetLang;
-        }
-
-        // 1. Accumulate input transcription (what the user said in the source language)
-        const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
+        // 1. Handle user's speech transcription (what the user said)
+        const inputTx = serverContent.inputTranscription || serverContent.input_transcription;
         if (inputTx && inputTx.text) {
-          const current = this.pendingInputTranscripts.get(targetLang) || "";
-          const newText = current + inputTx.text;
-          this.pendingInputTranscripts.set(targetLang, newText);
-
-          // If this channel is already active, dispatch the input transcript immediately
-          if (this.activeChannel === targetLang) {
-            const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-            this.onTranscript(newText, true, sourceLang);
-            this.pendingInputTranscripts.delete(targetLang);
-          }
+          const text = inputTx.text;
+          const detected = detectLanguage(text, this.lang1, this.lang2);
+          console.log(`Input transcription: "${text}" (detected: ${detected})`);
+          this.onTranscript(text, true, detected);
         }
 
-        // 2. Accumulate and dispatch output transcription (the translation text)
-        const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
+        // 2. Handle model's translation text (what the model generated)
+        const outputTx = serverContent.outputTranscription || serverContent.output_transcription;
         if (outputTx && outputTx.text) {
-          if (this.activeChannel === targetLang) {
-            // Dispatch any pending input transcript first
-            const pendingInput = this.pendingInputTranscripts.get(targetLang);
-            if (pendingInput) {
-              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-              this.onTranscript(pendingInput, true, sourceLang);
-              this.pendingInputTranscripts.delete(targetLang);
-            }
-
-            // Output the translation transcript
-            this.onTranscript(outputTx.text, true, targetLang);
-          }
+          const text = outputTx.text;
+          const detected = detectLanguage(text, this.lang1, this.lang2);
+          this.lastDetectedLang = detected;
+          console.log(`Output transcription: "${text}" (detected: ${detected})`);
+          this.onTranscript(text, false, detected);
         }
 
-        // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
-        const modelTurn = data.serverContent.modelTurn;
+        // 3. Handle model's turn (audio and streaming text)
+        const modelTurn = serverContent.modelTurn;
         if (modelTurn) {
-          if (this.activeChannel === targetLang) {
-            // Dispatch any pending input transcript first
-            const pendingInput = this.pendingInputTranscripts.get(targetLang);
-            if (pendingInput) {
-              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-              this.onTranscript(pendingInput, true, sourceLang);
-              this.pendingInputTranscripts.delete(targetLang);
+          for (const part of modelTurn.parts) {
+            if (part.text) {
+              const text = part.text;
+              const detected = detectLanguage(text, this.lang1, this.lang2);
+              this.lastDetectedLang = detected;
+              console.log(`Model part text: "${text}" (detected: ${detected})`);
+              this.onTranscript(text, false, detected);
             }
-
-            for (const part of modelTurn.parts) {
-              if (part.text) {
-                this.onTranscript(part.text, true, targetLang);
-              }
-              if (part.inlineData && part.inlineData.data) {
-                this.playAudio(part.inlineData.data);
-                this.lastAudioTime = Date.now();
-              }
+            if (part.inlineData && part.inlineData.data) {
+              this.playAudio(part.inlineData.data);
             }
           }
         }
 
-        // 4. Upon turn completion, clear state and release lock
-        if (data.serverContent.turnComplete) {
-          if (this.activeChannel === targetLang) {
-            const pendingInput = this.pendingInputTranscripts.get(targetLang);
-            if (pendingInput) {
-              const sourceLang = targetLang === this.lang1 ? this.lang2 : this.lang1;
-              this.onTranscript(pendingInput, true, sourceLang);
-            }
-            this.activeChannel = null;
-          }
-          this.pendingInputTranscripts.delete(targetLang);
+        // 4. Handle turn completion
+        if (serverContent.turnComplete) {
+          console.log("Turn complete");
+          const finalLang = this.lastDetectedLang || this.lang2;
+          this.onTranscript("", true, finalLang);
         }
 
-        if (data.serverContent.interrupted) {
+        // 5. Handle interruption
+        if (serverContent.interrupted) {
+          console.log("Turn interrupted");
           this.playbackNode?.port.postMessage("interrupt");
           this.playbackEndTime = 0;
-          if (this.activeChannel === targetLang) {
-            this.activeChannel = null;
-          }
-          this.pendingInputTranscripts.delete(targetLang);
         }
       }
     } catch (err: any) {
-      console.error("handleMessage Error:", err);
+      console.error("handleMessage error:", err);
       this.onError(`Erreur message: ${err.message || err}`);
     }
   }
 
   private async startAudio() {
     try {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Unlock AudioContext immediately within the user gesture before any asynchronous awaits.
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const dummySource = ctx.createBufferSource();
+      dummySource.buffer = buffer;
+      dummySource.connect(ctx.destination);
+      dummySource.start(0);
 
-      if (this.audioContext.state === "suspended") {
-        await this.audioContext.resume();
+      if (ctx.state === "suspended") {
+        await ctx.resume();
       }
 
-      // Get basePath for GitHub Pages (/translate/) or empty for local
+      this.audioContext = ctx;
+
+      // Get basePath for GitHub Pages (/translate) or empty for local
       const basePath = window.location.pathname.startsWith('/translate') ? '/translate' : '';
 
+      // Load worklet modules
       await this.audioContext.audioWorklet.addModule(`${basePath}/capture.worklet.js`);
       await this.audioContext.audioWorklet.addModule(`${basePath}/playback.worklet.js`);
 
+      // Request microphone access
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -254,7 +203,7 @@ export class GeminiClient {
         },
       });
 
-      const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      const micSource = this.audioContext.createMediaStreamSource(this.mediaStream);
       this.captureNode = new AudioWorkletNode(this.audioContext, "audio-capture-processor");
 
       this.captureNode.port.onmessage = (e) => {
@@ -263,7 +212,7 @@ export class GeminiClient {
             const rawData = e.data.data;
             this.sendAudio(rawData);
 
-            // Calculate RMS volume
+            // Calculate volume
             let sum = 0;
             for (let i = 0; i < rawData.length; i++) {
               sum += rawData[i] * rawData[i];
@@ -278,7 +227,7 @@ export class GeminiClient {
         }
       };
 
-      source.connect(this.captureNode);
+      micSource.connect(this.captureNode);
 
       this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
       this.playbackNode.port.onmessage = (e) => {
@@ -299,9 +248,7 @@ export class GeminiClient {
   private playAudio(base64Data: string) {
     if (!this.playbackNode) return;
 
-    // Force AudioContext resume if suspended (critical for iOS Safari)
     if (this.audioContext && this.audioContext.state === "suspended") {
-      console.log("AudioContext was suspended, resuming...");
       this.audioContext.resume().catch(console.error);
     }
 
@@ -311,13 +258,12 @@ export class GeminiClient {
     const durationMs = (binaryStr.length / 2) / 24;
     const now = Date.now();
     this.playbackEndTime = Math.max(this.playbackEndTime, now) + durationMs;
-    console.log(`playAudio: durationMs=${durationMs.toFixed(1)}, bytes=${binaryStr.length}, playbackEndTime=${this.playbackEndTime}, now=${now}`);
 
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
-    // Ensure even byte length to prevent RangeError during Int16Array construction
+    
     const alignedLength = Math.floor(bytes.byteLength / 2) * 2;
     const int16Array = new Int16Array(bytes.buffer, 0, alignedLength / 2);
     const float32Array = new Float32Array(int16Array.length);
@@ -325,7 +271,6 @@ export class GeminiClient {
       float32Array[i] = int16Array[i] / 32768.0;
     }
 
-    // Resample from 24000Hz to native sample rate
     const nativeRate = this.audioContext?.sampleRate || 48000;
     const resampled = this.resample(float32Array, 24000, nativeRate);
     
@@ -344,28 +289,23 @@ export class GeminiClient {
     const avg = resampled.length > 0 ? sum / resampled.length : 0;
     console.log(`playAudio stats: min=${min.toFixed(4)}, max=${max.toFixed(4)}, avg=${avg.toFixed(4)}, nans=${nanCount}, sampleRate=${nativeRate}`);
 
-    // Send audio buffer to worklet (transferring buffer to avoid copy)
+    // Send audio buffer to worklet (transferring buffer)
     this.playbackNode.port.postMessage(resampled, [resampled.buffer]);
   }
 
   private sendAudio(float32Data: Float32Array) {
     if (this.isSpeaking) {
-      console.log(`sendAudio: skipped because isSpeaking=true (remaining lock: ${this.playbackEndTime - Date.now()}ms)`);
-      return;
+      return; // Skip sending audio while playing back translation
     }
 
-    const ws1Open = this.ws1 && this.ws1.readyState === WebSocket.OPEN;
-    const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
-    if (!ws1Open && !ws2Open) {
-      console.log(`sendAudio: skipped because WebSockets not open (ws1=${ws1Open}, ws2=${ws2Open})`);
+    const wsOpen = this.ws && this.ws.readyState === WebSocket.OPEN;
+    if (!wsOpen) {
       return;
     }
 
     const nativeRate = this.audioContext?.sampleRate || 48000;
-    // Resample from native rate to 16000Hz for Gemini
     const resampled = this.resample(float32Data, nativeRate, 16000);
 
-    // Float32 to PCM 16-bit
     const int16Array = new Int16Array(resampled.length);
     for (let i = 0; i < resampled.length; i++) {
       let val = resampled[i] * 32768.0;
@@ -391,9 +331,7 @@ export class GeminiClient {
       },
     });
 
-    // Send same audio to both connections
-    if (ws1Open) this.ws1!.send(audioMessage);
-    if (ws2Open) this.ws2!.send(audioMessage);
+    this.ws!.send(audioMessage);
   }
 
   private resample(data: Float32Array, fromRate: number, toRate: number): Float32Array {
@@ -423,21 +361,13 @@ export class GeminiClient {
 
   disconnect() {
     this.onStateChange("idle");
-    this.ws1Ready = false;
-    this.ws2Ready = false;
     this.playbackEndTime = 0;
-    this.activeChannel = null;
-    this.lastAudioTime = 0;
-    this.pendingInputTranscripts.clear();
+    this.lastDetectedLang = "";
     this.onVolumeChange(0);
 
-    if (this.ws1) {
-      this.ws1.close();
-      this.ws1 = null;
-    }
-    if (this.ws2) {
-      this.ws2.close();
-      this.ws2 = null;
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
     }
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach((t) => t.stop());
