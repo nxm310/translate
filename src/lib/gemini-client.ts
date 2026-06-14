@@ -92,9 +92,9 @@ export class GeminiClient {
             targetLanguageCode: targetLang,
             echoTargetLanguage: false,
           },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
         },
+        input_audio_transcription: {},
+        output_audio_transcription: {},
         realtimeInputConfig: {
           activityHandling: "NO_INTERRUPTION",
         },
@@ -113,9 +113,10 @@ export class GeminiClient {
       }
     } else if (data.serverContent) {
       // 1. Accumulate input transcription (what the user said in the source language)
-      if (data.serverContent.inputTranscription && data.serverContent.inputTranscription.text) {
+      const inputTx = data.serverContent.inputTranscription || data.serverContent.input_transcription;
+      if (inputTx && inputTx.text) {
         const current = this.pendingInputTranscripts.get(targetLang) || "";
-        const newText = current + data.serverContent.inputTranscription.text;
+        const newText = current + inputTx.text;
         this.pendingInputTranscripts.set(targetLang, newText);
 
         // If this channel is already active, dispatch the input transcript immediately
@@ -127,7 +128,8 @@ export class GeminiClient {
       }
 
       // 2. Accumulate and dispatch output transcription (the translation text)
-      if (data.serverContent.outputTranscription && data.serverContent.outputTranscription.text) {
+      const outputTx = data.serverContent.outputTranscription || data.serverContent.output_transcription;
+      if (outputTx && outputTx.text) {
         this.hasTranslationActive.set(targetLang, true);
 
         // Dispatch any pending input transcript first
@@ -139,7 +141,7 @@ export class GeminiClient {
         }
 
         // Output the translation transcript
-        this.onTranscript(data.serverContent.outputTranscription.text, true, targetLang);
+        this.onTranscript(outputTx.text, true, targetLang);
       }
 
       // 3. Accumulate modelTurn parts (audio and optional fallback text translation)
