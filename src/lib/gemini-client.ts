@@ -133,6 +133,7 @@ export class GeminiClient {
           this.onStateChange("connected");
         }
       } else if (data.serverContent) {
+        console.log("handleMessage: received serverContent from", targetLang, Object.keys(data.serverContent));
         const now = Date.now();
         const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
 
@@ -293,6 +294,7 @@ export class GeminiClient {
 
     // Force AudioContext resume if suspended (critical for iOS Safari)
     if (this.audioContext && this.audioContext.state === "suspended") {
+      console.log("AudioContext was suspended, resuming...");
       this.audioContext.resume().catch(console.error);
     }
 
@@ -302,6 +304,7 @@ export class GeminiClient {
     const durationMs = (binaryStr.length / 2) / 24;
     const now = Date.now();
     this.playbackEndTime = Math.max(this.playbackEndTime, now) + durationMs;
+    console.log(`playAudio: durationMs=${durationMs.toFixed(1)}, bytes=${binaryStr.length}, playbackEndTime=${this.playbackEndTime}, now=${now}`);
 
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) {
@@ -318,16 +321,23 @@ export class GeminiClient {
     // Resample from 24000Hz to native sample rate
     const nativeRate = this.audioContext?.sampleRate || 48000;
     const resampled = this.resample(float32Array, 24000, nativeRate);
+    console.log(`playAudio: resampled from 24kHz to nativeRate=${nativeRate}, samples=${resampled.length}`);
 
     this.playbackNode.port.postMessage(resampled);
   }
 
   private sendAudio(float32Data: Float32Array) {
-    if (this.isSpeaking) return;
+    if (this.isSpeaking) {
+      console.log(`sendAudio: skipped because isSpeaking=true (remaining lock: ${this.playbackEndTime - Date.now()}ms)`);
+      return;
+    }
 
     const ws1Open = this.ws1 && this.ws1.readyState === WebSocket.OPEN;
     const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
-    if (!ws1Open && !ws2Open) return;
+    if (!ws1Open && !ws2Open) {
+      console.log(`sendAudio: skipped because WebSockets not open (ws1=${ws1Open}, ws2=${ws2Open})`);
+      return;
+    }
 
     const nativeRate = this.audioContext?.sampleRate || 48000;
     // Resample from native rate to 16000Hz for Gemini
