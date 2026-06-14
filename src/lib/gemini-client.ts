@@ -9,10 +9,8 @@ export class GeminiClient {
   private ws1Ready = false;
   private ws2Ready = false;
 
-  // Channel lock: only one connection can produce audio at a time
-  private activeChannel: string | null = null;
-  private lastAudioTime = 0;
-  private readonly CHANNEL_LOCK_TIMEOUT = 3000; // 3s silence before unlocking
+  // Speaking state: true when the app is playing translated audio
+  private isSpeaking = false;
 
   public onStateChange: (state: "idle" | "connecting" | "connected" | "error") => void = () => {};
   public onTranscript: (text: string, isFinal: boolean, targetLang: string) => void = () => {};
@@ -110,35 +108,18 @@ export class GeminiClient {
     } else if (data.serverContent) {
       const modelTurn = data.serverContent.modelTurn;
       if (modelTurn) {
-        // Channel lock: check if this connection is allowed to produce audio
-        const now = Date.now();
-        const lockExpired = !this.activeChannel || (now - this.lastAudioTime > this.CHANNEL_LOCK_TIMEOUT);
-
-        // If no channel is active or the lock expired, allow this channel to claim it
-        if (lockExpired && this.activeChannel !== targetLang) {
-          // Switching channels: flush any queued audio from the previous channel
-          if (this.activeChannel !== null) {
-            this.playbackNode?.port.postMessage("interrupt");
+        for (const part of modelTurn.parts) {
+          if (part.text) {
+            this.onTranscript(part.text, true, targetLang);
           }
-          this.activeChannel = targetLang;
-        }
-
-        // Only process audio/text from the active channel
-        if (this.activeChannel === targetLang) {
-          for (const part of modelTurn.parts) {
-            if (part.text) {
-              this.onTranscript(part.text, true, targetLang);
-            }
-            if (part.inlineData && part.inlineData.data) {
-              this.playAudio(part.inlineData.data);
-              this.lastAudioTime = Date.now();
-            }
+          if (part.inlineData && part.inlineData.data) {
+            this.playAudio(part.inlineData.data);
           }
         }
-        // else: discard audio from the non-active channel
       }
       if (data.serverContent.interrupted) {
         this.playbackNode?.port.postMessage("interrupt");
+        this.isSpeaking = false;
       }
     }
   }
@@ -177,6 +158,12 @@ export class GeminiClient {
       this.playbackNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
       this.playbackNode.connect(this.audioContext.destination);
 
+      this.playbackNode.port.onmessage = (e) => {
+        if (e.data && e.data.type === "state") {
+          this.isSpeaking = e.data.isPlaying;
+        }
+      };
+
     } catch (e) {
       console.error("Audio error", e);
       throw new Error("Veuillez autoriser l'accès au microphone dans les réglages de votre navigateur.");
@@ -185,6 +172,7 @@ export class GeminiClient {
 
   private playAudio(base64Data: string) {
     if (!this.playbackNode) return;
+    this.isSpeaking = true;
     const binaryStr = atob(base64Data);
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) {
@@ -200,6 +188,8 @@ export class GeminiClient {
   }
 
   private sendAudio(float32Data: Float32Array) {
+    if (this.isSpeaking) return;
+
     const ws1Open = this.ws1 && this.ws1.readyState === WebSocket.OPEN;
     const ws2Open = this.ws2 && this.ws2.readyState === WebSocket.OPEN;
     if (!ws1Open && !ws2Open) return;
@@ -248,8 +238,7 @@ export class GeminiClient {
     this.onStateChange("idle");
     this.ws1Ready = false;
     this.ws2Ready = false;
-    this.activeChannel = null;
-    this.lastAudioTime = 0;
+    this.isSpeaking = false;
 
     if (this.ws1) {
       this.ws1.close();

@@ -7,15 +7,25 @@ class PCMProcessor extends AudioWorkletProcessor {
     super();
     this.audioQueue = [];
     this.currentOffset = 0;
+    this.isPlaying = false;
 
     this.port.onmessage = (event) => {
       if (event.data === "interrupt") {
         this.audioQueue = [];
         this.currentOffset = 0;
+        this.updatePlaybackState(false);
       } else if (event.data instanceof Float32Array) {
         this.audioQueue.push(event.data);
+        this.updatePlaybackState(true);
       }
     };
+  }
+
+  updatePlaybackState(isPlaying) {
+    if (this.isPlaying !== isPlaying) {
+      this.isPlaying = isPlaying;
+      this.port.postMessage({ type: "state", isPlaying });
+    }
   }
 
   process(inputs, outputs, parameters) {
@@ -51,6 +61,9 @@ class PCMProcessor extends AudioWorkletProcessor {
     while (outputIndex < channel.length) {
       channel[outputIndex++] = 0;
     }
+
+    const currentlyPlaying = this.audioQueue.length > 0;
+    this.updatePlaybackState(currentlyPlaying);
 
     return true;
   }
